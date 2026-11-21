@@ -13,18 +13,20 @@ private final class SamplingSession: @unchecked Sendable {
 @main
 @MainActor
 final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    private let face = StatusFace()
+    private var face = StatusFace()
     private var item: NSStatusItem!
+    private var hover: StatusHover!
+    private let siteSettings = SiteSettings()
+    private var siteWindow: SiteSettingsWindow?
+    private var probeItem: NSMenuItem!
     private var loginItem: NSMenuItem!
     private let service = SMAppService.mainApp
     private let queue = DispatchQueue(label: "netrate.sample", qos: .utility)
     private var timer: DispatchSourceTimer?
     private var generation = 0
-    private var displayed: [RateText] = []
-    private var displayedConnectivity: ConnectivityState?
     private var latestSpeed: Speed?
     private var networkStore: SCDynamicStore?
-    private lazy var connectivity = ConnectivityMonitor { [weak self] in
+    private lazy var connectivity = ConnectivityMonitor(sites: siteSettings.load(), enabled: siteSettings.probingEnabled) { [weak self] in
         guard let self else { return }
         self.display(self.latestSpeed)
     }
@@ -42,9 +44,18 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item = NSStatusBar.system.statusItem(withLength: face.width)
         item.autosaveName = "NetRate"
         item.button?.setAccessibilityLabel("网速")
+        hover = StatusHover(item: item)
         let menu = NSMenu()
         menu.autoenablesItems = false
         menu.delegate = self
+        let sites = menu.addItem(withTitle: "探测站点配置", action: #selector(configureSites), keyEquivalent: "")
+        sites.target = self
+        menu.addItem(.separator())
+        probeItem = menu.addItem(withTitle: "启用站点探测", action: #selector(toggleProbing), keyEquivalent: "")
+        probeItem.target = self
+        probeItem.toolTip = HelpField.global.tip()
+        probeItem.setAccessibilityHelp(HelpField.global.tip())
+        probeItem.state = siteSettings.probingEnabled ? .on : .off
         loginItem = menu.addItem(withTitle: "登录时启动", action: #selector(toggleLogin), keyEquivalent: "")
         loginItem.target = self
         let quit = menu.addItem(withTitle: "退出", action: #selector(quitApp), keyEquivalent: "q")
@@ -54,6 +65,8 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let center = NSWorkspace.shared.notificationCenter
         center.addObserver(self, selector: #selector(stopSampling), name: NSWorkspace.willSleepNotification, object: nil)
         center.addObserver(self, selector: #selector(startSampling), name: NSWorkspace.didWakeNotification, object: nil)
+        center.addObserver(self, selector: #selector(resetHoverPosition),
+                           name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
         observeNetworkChanges()
         startSampling()
     }
@@ -67,15 +80,15 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let app = Unmanaged<Application>.fromOpaque(info).takeUnretainedValue()
             MainActor.assumeIsolated {
                 guard app.timer != nil else { return }
-                app.connectivity.start()
-                app.connectivity.tick()
+                app.connectivity.networkDidChange()
             }
         }, &context) else { return }
         let keys = ["State:/Network/Global/IPv4", "State:/Network/Global/IPv6",
                     "State:/Network/Global/DNS", "State:/Network/Global/Proxies"]
-        // A split tunnel can appear or disappear without changing the primary interface.
-        let addresses = ["State:/Network/Interface/[^/]+/IPv[46]"]
-        guard SCDynamicStoreSetNotificationKeys(store, keys as CFArray, addresses as CFArray),
+        // A tunnel can keep the primary route, and a physical link can cycle without changing its IP.
+        let interfaces = ["State:/Network/Interface/[^/]+/IPv[46]",
+                          "State:/Network/Interface/en[0-9]+/Link"]
+        guard SCDynamicStoreSetNotificationKeys(store, keys as CFArray, interfaces as CFArray),
               SCDynamicStoreSetDispatchQueue(store, .main) else { return }
         networkStore = store
     }
@@ -83,6 +96,7 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func startSampling() {
         stopSampling()
         connectivity.start()
+        hover.start()
         let token = generation
         let session = SamplingSession()
         let source = DispatchSource.makeTimerSource(queue: queue)
@@ -91,7 +105,6 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let speed = session.read()
             DispatchQueue.main.async {
                 guard let self, self.generation == token else { return }
-                self.connectivity.tick()
                 self.display(speed)
             }
         }
@@ -103,22 +116,55 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
         generation += 1
         timer?.cancel()
         timer = nil
+        hover.stop()
         connectivity.stop()
         display(nil)
     }
 
     private func display(_ speed: Speed?) {
         latestSpeed = speed
-        let up = RateText(speed?.upload), down = RateText(speed?.download)
         let state = connectivity.state
-        guard displayed != [up, down] || displayedConnectivity != state else { return }
-        displayed = [up, down]
-        displayedConnectivity = state
-        item.button?.image = face.image(upload: up, download: down, reachable: state == .reachable)
-        item.button?.setAccessibilityValue("上行" + up.spoken + "，下行" + down.spoken + "，" + state.rawValue)
+        if let button = item.button {
+            face.update(button, speed: speed, connectivity: state)
+        }
+        hover.update(state)
+        siteWindow?.refreshEstimate()
     }
 
-    func menuWillOpen(_ menu: NSMenu) { refreshLogin() }
+    func applicationDidChangeScreenParameters(_ notification: Notification) { hover?.resetPosition() }
+
+    @objc private func resetHoverPosition() { hover.resetPosition() }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        hover.setMenuOpen(true)
+        refreshLogin()
+    }
+
+    func menuDidClose(_ menu: NSMenu) { hover.setMenuOpen(false) }
+
+    @objc private func configureSites() {
+        if let siteWindow {
+            siteWindow.present()
+            return
+        }
+        let window = SiteSettingsWindow(sites: siteSettings.load(), estimate: connectivity.estimate(for:)) { [weak self] sites in
+            guard let self else { return }
+            if let sites {
+                try self.siteSettings.save(sites)
+                self.connectivity.apply(sites)
+            }
+            self.siteWindow = nil
+        }
+        siteWindow = window
+        window.present()
+    }
+
+    @objc private func toggleProbing() {
+        let value = !siteSettings.probingEnabled
+        siteSettings.probingEnabled = value
+        probeItem.state = value ? .on : .off
+        connectivity.setEnabled(value)
+    }
 
     private func refreshLogin() {
         let status = service.status

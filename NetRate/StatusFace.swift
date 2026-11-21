@@ -7,6 +7,8 @@ struct StatusFace {
     private let units: NSFont
     private let arrowColumn: CGFloat = 4
     private let numberEnd: CGFloat
+    private var displayed: [RateText] = []
+    private var displayedConnectivity: ConnectivityState?
     let width: CGFloat
 
     init() {
@@ -17,7 +19,23 @@ struct StatusFace {
         width = numberEnd + gap + ceil(("M" as NSString).size(withAttributes: [.font: units]).width)
     }
 
-    func image(upload: RateText, download: RateText, reachable: Bool) -> NSImage {
+    mutating func update(_ button: NSButton, speed: Speed?, connectivity: ConnectivityState) {
+        let up = RateText(speed?.upload), down = RateText(speed?.download)
+        let ratesChanged = displayed != [up, down]
+        guard ratesChanged || displayedConnectivity != connectivity else { return }
+        if ratesChanged || displayedConnectivity?.color != connectivity.color {
+            button.image = image(upload: up, download: down, color: connectivity.color)
+        }
+        let summary = connectivity.summary
+        if displayedConnectivity != connectivity {
+            button.setAccessibilityHelp(summary)
+        }
+        button.setAccessibilityValue("上行" + up.spoken + "，下行" + down.spoken + "，" + summary)
+        displayed = [up, down]
+        displayedConnectivity = connectivity
+    }
+
+    func image(upload: RateText, download: RateText, color: ArrowColor) -> NSImage {
         let size = NSSize(width: width, height: 20)
         // All three displays use 2x backing. Rasterize once so AppKit can use
         // the same glyph mask for active and inactive menu bar replicas.
@@ -57,7 +75,13 @@ struct StatusFace {
             target.clip(to: bounds, mask: mask)
             let (arrows, text) = bounds.divided(atDistance: bounds.width * arrowColumn / size.width, from: .minXEdge)
             let foreground = NSColor.labelColor.withAlphaComponent(1)
-            (reachable ? NSColor.systemGreen : foreground).setFill()
+            let arrowColor: NSColor = switch color {
+            case .normal: foreground
+            case .green: .systemGreen
+            case .orange: .systemOrange
+            case .red: .systemRed
+            }
+            arrowColor.setFill()
             target.fill(arrows)
             foreground.setFill()
             target.fill(text)
