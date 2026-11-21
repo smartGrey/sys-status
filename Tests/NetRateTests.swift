@@ -1,6 +1,25 @@
 import AppKit
 import XCTest
 
+// Keep transport tests deterministic and independent of the developer's network.
+private final class ProbeProtocol: URLProtocol, @unchecked Sendable {
+    @MainActor static var onRequest: ((ProbeProtocol) -> Void)?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        Task { @MainActor in Self.onRequest?(self) }
+    }
+    override func stopLoading() {}
+
+    func reply(_ status: Int) {
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1",
+                                       headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+}
+
 final class NetRateTests: XCTestCase {
     private func counters(
         received: UInt64,
@@ -135,8 +154,17 @@ final class NetRateTests: XCTestCase {
     }
 
     @MainActor
-    func testDigitContrastAcrossAppearances() throws {
-        let image = StatusFace().image(upload: RateText(999000), download: RateText(1.4e6))
+    func testStatusColorsAcrossAppearances() throws {
+        let face = StatusFace()
+        XCTAssertEqual(face.width, 34)
+        for reachable in [false, true] {
+            let image = face.image(upload: RateText(999000), download: RateText(1.4e6), reachable: reachable)
+            try checkColors(image, reachable: reachable)
+        }
+    }
+
+    @MainActor
+    private func checkColors(_ image: NSImage, reachable: Bool) throws {
         for (name, expected) in [(NSAppearance.Name.aqua, 0.0), (.darkAqua, 1.0), (.aqua, 0.0)] {
             let appearance = try XCTUnwrap(NSAppearance(named: name))
             let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 100, pixelsHigh: 40,
@@ -149,17 +177,101 @@ final class NetRateTests: XCTestCase {
                 image.draw(in: NSRect(x: 0, y: 0, width: image.size.width * 2, height: 40))
                 NSGraphicsContext.restoreGraphicsState()
                 var solidPixels = 0
+                var arrowPixels = [0, 0]
                 for y in 0..<rep.pixelsHigh {
                     for x in 0..<rep.pixelsWide {
                         guard let pixel = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
                               pixel.alphaComponent > 0.95 else { continue }
                         solidPixels += 1
-                        XCTAssertEqual(pixel.redComponent, expected, accuracy: 0.04)
+                        if x < 8 {
+                            arrowPixels[y / 20] += 1
+                            if reachable {
+                                XCTAssertGreaterThan(pixel.greenComponent, pixel.redComponent)
+                                XCTAssertGreaterThan(pixel.greenComponent, pixel.blueComponent)
+                                continue
+                            }
+                        }
+                        for component in [pixel.redComponent, pixel.greenComponent, pixel.blueComponent] {
+                            XCTAssertEqual(component, expected, accuracy: 0.04)
+                        }
                     }
                 }
                 XCTAssertGreaterThan(solidPixels, 100)
+                for count in arrowPixels { XCTAssertGreaterThan(count, 20) }
             }
         }
+    }
+
+    @MainActor
+    func testProbeCadenceAndStateChanges() async {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ProbeProtocol.self]
+        var changed: XCTestExpectation?
+        let monitor = ConnectivityMonitor(configuration: configuration) { changed?.fulfill() }
+        defer { changed = nil; monitor.stop(); ProbeProtocol.onRequest = nil }
+        monitor.start()
+        XCTAssertEqual(monitor.state, .checking)
+        var requests = 0
+        for (status, expected) in [(204, ConnectivityState.reachable), (302, .unreachable),
+                                   (204, .reachable), (200, .unreachable)] {
+            let before = requests
+            changed = expectation(description: "Probe result for HTTP \(status)")
+            ProbeProtocol.onRequest = { probe in
+                requests += 1
+                XCTAssertEqual(probe.request.url?.absoluteString, "https://www.google.com/generate_204")
+                // A second scheduled probe must be skipped while this one is pending.
+                monitor.tick()
+                monitor.tick()
+                probe.reply(status)
+            }
+            if before > 0 { monitor.tick() }
+            monitor.tick()
+            await fulfillment(of: [changed!], timeout: 2)
+            XCTAssertEqual(monitor.state, expected)
+            XCTAssertEqual(requests, before + 1)
+        }
+        changed = nil
+        monitor.stop()
+        monitor.tick()
+        XCTAssertEqual(monitor.state, .checking)
+    }
+
+    @MainActor
+    func testStopDuringProbeAndRecoveryAfterRestart() async {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ProbeProtocol.self]
+        var updates = 0
+        var changed: XCTestExpectation?
+        let monitor = ConnectivityMonitor(configuration: configuration) {
+            updates += 1
+            changed?.fulfill()
+        }
+        defer { changed = nil; ProbeProtocol.onRequest = nil; monitor.stop() }
+
+        let started = expectation(description: "First request is pending")
+        ProbeProtocol.onRequest = { _ in started.fulfill() }
+        monitor.start()
+        monitor.tick()
+        await fulfillment(of: [started], timeout: 2)
+        monitor.stop()
+        monitor.tick()
+
+        changed = expectation(description: "New path reports success")
+        ProbeProtocol.onRequest = { $0.reply(204) }
+        monitor.start()
+        monitor.tick()
+        await fulfillment(of: [changed!], timeout: 2)
+        XCTAssertEqual(updates, 1)
+        XCTAssertEqual(monitor.state, .reachable)
+
+        changed = expectation(description: "Unresponsive request times out")
+        ProbeProtocol.onRequest = { _ in } // Leave the task pending until URLSession's resource deadline.
+        monitor.tick()
+        monitor.tick()
+        let start = ContinuousClock.now
+        await fulfillment(of: [changed!], timeout: 7)
+        XCTAssertGreaterThanOrEqual(start.duration(to: .now), .seconds(4))
+        XCTAssertEqual(monitor.state, .unreachable)
     }
 
     func testNativeReaderAndMalformedInput() throws {

@@ -1,5 +1,6 @@
 import AppKit
 import ServiceManagement
+import SystemConfiguration
 
 // Each waking session owns a fresh reader and baseline. Only the serial timer
 // queue calls read(); the main actor owns the source and all AppKit objects.
@@ -20,6 +21,13 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var timer: DispatchSourceTimer?
     private var generation = 0
     private var displayed: [RateText] = []
+    private var displayedConnectivity: ConnectivityState?
+    private var latestSpeed: Speed?
+    private var networkStore: SCDynamicStore?
+    private lazy var connectivity = ConnectivityMonitor { [weak self] in
+        guard let self else { return }
+        self.display(self.latestSpeed)
+    }
 
     static func main() {
         let app = NSApplication.shared
@@ -46,11 +54,35 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let center = NSWorkspace.shared.notificationCenter
         center.addObserver(self, selector: #selector(stopSampling), name: NSWorkspace.willSleepNotification, object: nil)
         center.addObserver(self, selector: #selector(startSampling), name: NSWorkspace.didWakeNotification, object: nil)
+        observeNetworkChanges()
         startSampling()
+    }
+
+    private func observeNetworkChanges() {
+        // The delegate outlives this registration; callbacks are delivered on the main queue.
+        var context = SCDynamicStoreContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
+                                            retain: nil, release: nil, copyDescription: nil)
+        guard let store = SCDynamicStoreCreate(nil, "NetRate" as CFString, { _, _, info in
+            guard let info else { return }
+            let app = Unmanaged<Application>.fromOpaque(info).takeUnretainedValue()
+            MainActor.assumeIsolated {
+                guard app.timer != nil else { return }
+                app.connectivity.start()
+                app.connectivity.tick()
+            }
+        }, &context) else { return }
+        let keys = ["State:/Network/Global/IPv4", "State:/Network/Global/IPv6",
+                    "State:/Network/Global/DNS", "State:/Network/Global/Proxies"]
+        // A split tunnel can appear or disappear without changing the primary interface.
+        let addresses = ["State:/Network/Interface/[^/]+/IPv[46]"]
+        guard SCDynamicStoreSetNotificationKeys(store, keys as CFArray, addresses as CFArray),
+              SCDynamicStoreSetDispatchQueue(store, .main) else { return }
+        networkStore = store
     }
 
     @objc private func startSampling() {
         stopSampling()
+        connectivity.start()
         let token = generation
         let session = SamplingSession()
         let source = DispatchSource.makeTimerSource(queue: queue)
@@ -59,6 +91,7 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let speed = session.read()
             DispatchQueue.main.async {
                 guard let self, self.generation == token else { return }
+                self.connectivity.tick()
                 self.display(speed)
             }
         }
@@ -70,15 +103,19 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
         generation += 1
         timer?.cancel()
         timer = nil
+        connectivity.stop()
         display(nil)
     }
 
     private func display(_ speed: Speed?) {
+        latestSpeed = speed
         let up = RateText(speed?.upload), down = RateText(speed?.download)
-        guard displayed != [up, down] else { return }
+        let state = connectivity.state
+        guard displayed != [up, down] || displayedConnectivity != state else { return }
         displayed = [up, down]
-        item.button?.image = face.image(upload: up, download: down)
-        item.button?.setAccessibilityValue("上行" + up.spoken + "，下行" + down.spoken)
+        displayedConnectivity = state
+        item.button?.image = face.image(upload: up, download: down, reachable: state == .reachable)
+        item.button?.setAccessibilityValue("上行" + up.spoken + "，下行" + down.spoken + "，" + state.rawValue)
     }
 
     func menuWillOpen(_ menu: NSMenu) { refreshLogin() }
@@ -106,8 +143,8 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func quitApp() { NSApp.terminate(nil) }
 
     func applicationWillTerminate(_ notification: Notification) {
-        generation += 1
-        timer?.cancel()
+        if let networkStore { SCDynamicStoreSetDispatchQueue(networkStore, nil) }
+        stopSampling()
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         NSStatusBar.system.removeStatusItem(item)
     }
