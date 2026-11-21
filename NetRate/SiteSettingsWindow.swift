@@ -13,6 +13,8 @@ final class SiteSettingsWindow: NSWindowController, NSWindowDelegate, NSTableVie
     private let help = ConfigurationHelpWindow()
     private lazy var edit = NSButton(title: "编辑站点", target: self, action: #selector(editSite))
     private lazy var remove = NSButton(title: "删除", target: self, action: #selector(removeSite))
+    private lazy var up = NSButton(title: "上移", target: self, action: #selector(moveSiteUp))
+    private lazy var down = NSButton(title: "下移", target: self, action: #selector(moveSiteDown))
 
     init(sites: [ProbeSite], estimate: @escaping ([ProbeSite]) -> ProbeEstimate, finish: @escaping ([ProbeSite]?) throws -> Void) {
         draft = sites
@@ -57,7 +59,7 @@ final class SiteSettingsWindow: NSWindowController, NSWindowDelegate, NSTableVie
         cancel.keyEquivalent = "\u{1b}"
         let save = NSButton(title: "保存", target: self, action: #selector(saveChanges))
         save.keyEquivalent = "\r"
-        let actions = NSStackView(views: [add, edit, remove, help.makeButton(), NSView(), cancel, save])
+        let actions = NSStackView(views: [add, edit, remove, up, down, help.makeButton(), NSView(), cancel, save])
         for case let button as NSButton in actions.arrangedSubviews {
             button.setContentCompressionResistancePriority(.required, for: .horizontal)
         }
@@ -139,7 +141,7 @@ final class SiteSettingsWindow: NSWindowController, NSWindowDelegate, NSTableVie
 
     func tableViewSelectionDidChange(_ notification: Notification) { refreshActions() }
 
-    private var editableRow: Int? {
+    private var selectedRow: Int? {
         let row = table.selectedRow
         return draft.indices.contains(row) ? row : nil
     }
@@ -157,8 +159,11 @@ final class SiteSettingsWindow: NSWindowController, NSWindowDelegate, NSTableVie
 
     private func refreshActions() {
         refreshEstimate()
-        edit.isEnabled = editableRow != nil
-        remove.isEnabled = editableRow.map { !draft[$0].isBuiltIn } ?? false
+        let row = selectedRow
+        edit.isEnabled = row != nil
+        remove.isEnabled = row.map { !draft[$0].isBuiltIn } ?? false
+        up.isEnabled = row.map { $0 > 0 } ?? false
+        down.isEnabled = row.map { $0 < draft.count - 1 } ?? false
     }
 
     @objc private func toggleSite(_ sender: NSButton) {
@@ -176,13 +181,28 @@ final class SiteSettingsWindow: NSWindowController, NSWindowDelegate, NSTableVie
     @objc private func addSite() { showEditor(row: nil) }
 
     @objc private func editSite() {
-        if let row = editableRow { showEditor(row: row) }
+        if let row = selectedRow { showEditor(row: row) }
     }
 
     @objc private func removeSite() {
-        guard let row = editableRow, !draft[row].isBuiltIn else { return }
+        guard let row = selectedRow, !draft[row].isBuiltIn else { return }
         draft.remove(at: row)
         table.reloadData()
+        refreshActions()
+    }
+
+    @objc private func moveSiteUp() { moveSelectedSite(by: -1) }
+    @objc private func moveSiteDown() { moveSelectedSite(by: 1) }
+
+    private func moveSelectedSite(by offset: Int) {
+        guard let row = selectedRow else { return }
+        let destination = row + offset
+        guard draft.indices.contains(destination) else { return }
+        draft.swapAt(row, destination)
+        table.reloadData(forRowIndexes: IndexSet([row, destination]),
+                         columnIndexes: IndexSet(integersIn: 0..<table.numberOfColumns))
+        table.selectRowIndexes(IndexSet(integer: destination), byExtendingSelection: false)
+        table.scrollRowToVisible(destination)
         refreshActions()
     }
 

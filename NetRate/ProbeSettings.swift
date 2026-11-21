@@ -189,28 +189,28 @@ struct SiteSettings {
     func load() -> [ProbeSite] {
         guard let data = defaults.data(forKey: key),
               let records = try? JSONDecoder().decode([StoredSite].self, from: data) else { return ProbeSite.builtIns }
-        let saved = records.compactMap(\.site)
-        var sites = ProbeSite.builtIns.map { site in
-            var builtIn = site
-            if let stored = saved.first(where: { $0.id == site.id }) {
+        var sites: [ProbeSite] = []
+        var ids = Set<String>()
+        for stored in records.compactMap(\.site) where !ids.contains(stored.id) {
+            let site: ProbeSite
+            if var builtIn = ProbeSite.builtIns.first(where: { $0.id == stored.id }) {
                 builtIn.enabled = stored.enabled
                 builtIn.daily = stored.daily
                 builtIn.fresh = stored.fresh
+                site = builtIn
+            } else {
+                guard var custom = try? ProbeSite.custom(id: stored.id, name: stored.name, address: stored.url.absoluteString,
+                                                         enabled: stored.enabled, statusCodes: stored.statusCodes) else { continue }
+                custom.method = stored.method
+                custom.daily = stored.daily
+                custom.fresh = stored.fresh
+                site = custom
             }
-            return builtIn
+            sites.append(site)
+            ids.insert(site.id)
         }
-        var ids = Set(sites.map(\.id))
-        for site in saved where !ids.contains(site.id) {
-            if var custom = try? ProbeSite.custom(id: site.id, name: site.name, address: site.url.absoluteString,
-                                                  enabled: site.enabled, statusCodes: site.statusCodes) {
-                custom.method = site.method
-                custom.daily = site.daily
-                custom.fresh = site.fresh
-                sites.append(custom)
-                ids.insert(site.id)
-            }
-        }
-        return sites
+        // Older records can omit built-ins. Only insert those missing from the saved order.
+        return ProbeSite.builtIns.filter { !ids.contains($0.id) } + sites
     }
 
     func save(_ sites: [ProbeSite]) throws {

@@ -851,6 +851,81 @@ final class NetRateTests: XCTestCase {
     }
 
     @MainActor
+    func testSiteWindowSavesHoverOrderAndKeepsProbeHistory() async throws {
+        let custom = try ProbeSite.custom(name: "Example", address: "https://example.com/status", enabled: false)
+        let sites = ProbeSite.builtIns + [custom]
+        let expected = [custom, sites[1], sites[0]]
+        let domain = "NetRateTests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let settings = SiteSettings(defaults: defaults)
+        try settings.save(sites)
+        let h = ProbeHarness(sites: sites)
+        defer { h.stop() }
+        try await waitUntil { h.daily.count == 2 && h.fresh.count == 2 }
+        for probe in h.daily { probe.reply(204) }
+        try await waitUntil { h.monitor.state.rows.prefix(2).allSatisfy { $0.dailyCount.successes == 1 } }
+        let originalRows = h.monitor.state.rows
+        let originalSessions = h.sessions
+
+        func editOrder(save: Bool) throws {
+            let controller = SiteSettingsWindow(sites: settings.load(), estimate: h.monitor.estimate(for:)) { updated in
+                if let updated {
+                    try settings.save(updated)
+                    h.monitor.apply(updated)
+                }
+            }
+            let window = try XCTUnwrap(controller.window)
+            let content = try XCTUnwrap(window.contentView)
+            window.setContentSize(window.contentMinSize)
+            content.layoutSubtreeIfNeeded()
+            let table = try XCTUnwrap(view(content) { (_: NSTableView) in true })
+            let up = try XCTUnwrap(view(content) { (button: NSButton) in button.title == "上移" })
+            let down = try XCTUnwrap(view(content) { (button: NSButton) in button.title == "下移" })
+            for button in [up, down] {
+                XCTAssertGreaterThanOrEqual(button.frame.width, button.intrinsicContentSize.width)
+                XCTAssertFalse(button.isEnabled)
+            }
+            table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+            XCTAssertFalse(up.isEnabled)
+            down.performClick(nil)
+            XCTAssertEqual(table.selectedRow, 1)
+            XCTAssertTrue(up.isEnabled)
+            down.performClick(nil)
+            XCTAssertEqual(table.selectedRow, 2)
+            XCTAssertFalse(down.isEnabled)
+            table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+            up.performClick(nil)
+            XCTAssertEqual(table.selectedRow, 0)
+            XCTAssertFalse(up.isEnabled)
+            let cell = try XCTUnwrap(table.view(atColumn: 1, row: 0, makeIfNecessary: true))
+            XCTAssertNotNil(view(cell) { (label: NSTextField) in label.stringValue == custom.name })
+            XCTAssertEqual(settings.load(), sites)
+            XCTAssertEqual(h.monitor.state.rows, originalRows)
+            let done = try XCTUnwrap(view(content) { (button: NSButton) in button.title == (save ? "保存" : "取消") })
+            done.performClick(nil)
+        }
+
+        try editOrder(save: false)
+        XCTAssertEqual(settings.load(), sites)
+        XCTAssertEqual(h.monitor.state.rows, originalRows)
+        try editOrder(save: true)
+        XCTAssertEqual(SiteSettings(defaults: defaults).load(), expected)
+        XCTAssertEqual(h.monitor.state.rows, Array(originalRows.reversed()))
+        XCTAssertEqual(h.sessions, originalSessions)
+        XCTAssertFalse(h.fresh.contains(where: \.stopped))
+
+        let hover = HoverCard()
+        _ = hover.update(h.monitor.state, availableHeight: 240)
+        let hoverContent = try XCTUnwrap(hover.contentView)
+        let expectedNames = expected.map(\.name)
+        let names = hoverContent.subviews.compactMap { $0 as? NSTextField }
+            .filter { expectedNames.contains($0.stringValue) }
+            .sorted { $0.frame.minY > $1.frame.minY }
+        XCTAssertEqual(names.map(\.stringValue), expectedNames)
+    }
+
+    @MainActor
     func testEditorPreviewsPerLaneValidatesAndDiscardsDrafts() async throws {
         let site = ProbeSite.builtIns[0]
         let monitor = ConnectivityMonitor(sites: [site], automaticTimer: false) {}
@@ -1055,6 +1130,7 @@ final class NetRateTests: XCTestCase {
         XCTAssertFalse(SiteSettings(defaults: defaults).probingEnabled)
         let legacy = Data(#"[{"id":"old","name":"Codex","url":"https://example.com/","enabled":true,"expectedStatusCode":405}]"#.utf8)
         defaults.set(legacy, forKey: "NetRate.ProbeSites.v1")
+        XCTAssertEqual(Array(settings.load().dropLast()), ProbeSite.builtIns)
         XCTAssertEqual(settings.load().last?.statusCodes.text, "405")
         XCTAssertFalse(settings.load().last!.accepts(statusCode: 200))
         XCTAssertEqual(settings.load().last?.method, .head)
