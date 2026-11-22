@@ -232,7 +232,9 @@ final class HoverCard: NSBox {
 
     func update(_ state: ConnectivityState, availableHeight: CGFloat, availableWidth: CGFloat = .greatestFiniteMagnitude) -> NSSize {
         let rateWidth = ceil(headers[3].intrinsicContentSize.width) + 4
-        let width = min(304 + rateWidth, availableWidth)
+        let hasTCP = state.rows.contains(where: \.isTCP)
+        let freshWidth: CGFloat = hasTCP ? 84 : 61
+        let width = min(304 + rateWidth + freshWidth - 61, availableWidth)
         let count = state.enabled ? state.rows.count : 0
         let slots = max(1, Int((availableHeight - 91) / 22))
         let visible = count > slots ? slots - 1 : count
@@ -246,10 +248,11 @@ final class HoverCard: NSBox {
         let rateX = width - 14 - rateWidth
         // Leave room for a recognizable site name when the visible screen is narrow.
         let latencyWidth = min(61, max(48, floor((rateX - 90) / 2)))
-        let freshX = rateX - 4 - latencyWidth
+        let freshColumnWidth = latencyWidth + freshWidth - 61
+        let freshX = rateX - 4 - freshColumnWidth
         let dailyX = freshX - 4 - latencyWidth
         let columns: [(x: CGFloat, width: CGFloat)] = [(14, max(0, dailyX - 18)), (dailyX, latencyWidth),
-                                                       (freshX, latencyWidth), (rateX, rateWidth)]
+                                                       (freshX, freshColumnWidth), (rateX, rateWidth)]
         for (index, column) in columns.enumerated() {
             headers[index].isHidden = count == 0
             headers[index].frame = NSRect(x: column.x, y: size.height - 51, width: column.width,
@@ -278,7 +281,7 @@ final class HoverCard: NSBox {
             row.name.stringValue = site.name
             row.name.setAccessibilityLabel(site.spoken)
             row.daily.frame = NSRect(x: dailyX, y: y, width: latencyWidth, height: 17)
-            row.fresh.frame = NSRect(x: freshX, y: y, width: latencyWidth, height: 17)
+            row.fresh.frame = NSRect(x: freshX, y: y, width: freshColumnWidth, height: 17)
             row.rate.frame = NSRect(x: rateX, y: y, width: rateWidth, height: 17)
             row.daily.stringValue = site.text(for: .daily)
             row.fresh.stringValue = site.text(for: .fresh)

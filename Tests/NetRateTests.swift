@@ -1,5 +1,6 @@
 import AppKit
 import Network
+import dnssd
 import Security
 import Synchronization
 import XCTest
@@ -601,7 +602,7 @@ final class NetRateTests: XCTestCase {
         h.monitor.setEnabled(true)
         try await waitUntil { h.fresh.count == 7 }
         XCTAssertEqual(h.monitor.state.color, .normal)
-        XCTAssertEqual(h.fresh.last?.request.url, ProbeSite.builtIns[1].url)
+        XCTAssertEqual(h.fresh.last?.request.url, ProbeSite.builtIns[1].endpoint.httpsURL)
         h.monitor.networkDidChange()
         try await waitUntil { h.delay.completions.count == 1 }
         h.monitor.stop()
@@ -618,7 +619,7 @@ final class NetRateTests: XCTestCase {
         defer { h.stop() }
         try await waitUntil { h.fresh.count == 3 && h.daily.count == 3 }
         for p in h.daily + h.fresh {
-            let isCustom = p.request.url == custom.url
+            let isCustom = p.request.url == custom.endpoint.httpsURL
             XCTAssertEqual(p.request.httpMethod, isCustom ? "HEAD" : "GET")
             p.reply(isCustom ? 405 : 204)
         }
@@ -635,7 +636,7 @@ final class NetRateTests: XCTestCase {
         h.daily[3].reply(302)
         try await waitUntil { h.monitor.state.color == .green }
         XCTAssertFalse(h.fresh.contains { $0.request.url == destination })
-        custom.url = URL(string: "https://example.com/new")!
+        custom.endpoint = .https(URL(string: "https://example.com/new")!)
         h.monitor.apply(ProbeSite.builtIns + [custom])
         try await waitUntil { h.fresh.count == 5 }
         h.fresh[4].reply(302, url: destination)
@@ -659,8 +660,8 @@ final class NetRateTests: XCTestCase {
         h.monitor.apply([custom])
         XCTAssertEqual(h.sessions.count, sessionsBeforeChange, "Retiring tasks occupy slots for this site and lane")
         try await waitUntil { h.fresh.count == 5 && h.daily.count == 5 }
-        XCTAssertEqual(h.fresh[4].request.url, custom.url)
-        XCTAssertEqual(h.daily[4].request.url, custom.url)
+        XCTAssertEqual(h.fresh[4].request.url, custom.endpoint.httpsURL)
+        XCTAssertEqual(h.daily[4].request.url, custom.endpoint.httpsURL)
         XCTAssertEqual(h.monitor.state.rows[0].fresh, .checking)
         h.daily[4].reply(204)
         h.fresh[4].reply(204)
@@ -914,6 +915,14 @@ final class NetRateTests: XCTestCase {
     }
 
     @MainActor
+    private func addSite(_ type: String, in root: NSView) throws {
+        let popup = try XCTUnwrap(view(root) { (p: NSPopUpButton) in p.title == "新增站点" })
+        let menu = try XCTUnwrap(popup.menu)
+        let item = try XCTUnwrap(menu.item(withTitle: type))
+        menu.performActionForItem(at: menu.index(of: item))
+    }
+
+    @MainActor
     private func view<T: NSView>(_ root: NSView, matching predicate: (T) -> Bool) -> T? {
         if let match = root as? T, predicate(match) { return match }
         for child in root.subviews {
@@ -989,8 +998,21 @@ final class NetRateTests: XCTestCase {
             name.delegate?.controlTextDidChange?(.init(name: NSControl.textDidChangeNotification, object: name))
         }
         let apply = try button("应用", in: root)
+        XCTAssertEqual(try button("保存", in: root).keyEquivalent, "")
+        XCTAssertNil(window.defaultButtonCell)
         XCTAssertFalse(apply.isEnabled)
-        typeName(" Applied ")
+        XCTAssertTrue(window.makeFirstResponder(name))
+        let fieldEditor = try XCTUnwrap(name.currentEditor())
+        fieldEditor.selectAll(nil)
+        fieldEditor.insertText(" Applied ")
+        let enter = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "\r",
+            charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+        if !window.performKeyEquivalent(with: enter) { window.firstResponder?.keyDown(with: enter) }
+        XCTAssertNil(name.currentEditor())
+        XCTAssertTrue(window.isVisible)
+        XCTAssertFalse(closed)
+        XCTAssertEqual(try store.read().configuration.sites.last?.name, "Example")
         XCTAssertTrue(apply.isEnabled)
         apply.performClick(nil)
         XCTAssertEqual(try store.read().configuration.sites.last?.name, "Applied")
@@ -1165,12 +1187,11 @@ final class NetRateTests: XCTestCase {
         XCTAssertNotNil(menu.item(withTitle: "在 Finder 中显示"))
         let reload = try XCTUnwrap(menu.item(withTitle: "重新读取配置"))
         let table = try XCTUnwrap(view(content) { (_: NSTableView) in true })
-        let add = try XCTUnwrap(view(content) { (b: NSButton) in b.title == "新增站点" })
         func alertButton(_ title: String) throws -> NSButton {
             let root = try XCTUnwrap(window.attachedSheet?.contentView)
             return try XCTUnwrap(view(root) { (button: NSButton) in button.title == title })
         }
-        add.performClick(nil)
+        try addSite("HTTPS", in: content)
         XCTAssertEqual(table.numberOfRows, 3)
         var updated = initial
         updated.probingEnabled = false
@@ -1259,7 +1280,7 @@ final class NetRateTests: XCTestCase {
         google.toggle()
         google.toggle()
         XCTAssertEqual(google.draft.form.personal[.fresh]?.first?.numbers.first, "12")
-        try click("新增站点", in: root)
+        try addSite("HTTPS", in: root)
         XCTAssertEqual(table.numberOfRows, 5)
         try click("保存", in: root)
         XCTAssertNil(saved)
@@ -1437,7 +1458,7 @@ final class NetRateTests: XCTestCase {
         XCTAssertGreaterThan(scroller.contentView.bounds.minY, 0)
         try selectTopic(HelpField.codes.rawValue)
         XCTAssertEqual(scroller.contentView.bounds.minY, 0, accuracy: 1)
-        try button("新增站点", in: list).performClick(nil)
+        try addSite("HTTPS", in: list)
         XCTAssertNil(window.attachedSheet)
         let root = list
         let address = try XCTUnwrap(view(root) { (f: NSTextField) in f.accessibilityLabel() == "HTTPS 地址" })
@@ -1472,6 +1493,174 @@ final class NetRateTests: XCTestCase {
     }
 
     @MainActor
+    func testTCPFormMenuAndConfigurationRoundTrip() throws {
+        var saved: [ProbeSite] = []
+        let controller = SiteSettingsWindow(sites: ProbeSite.builtIns, probingEnabled: true) { saved = $0 }
+        let window = try XCTUnwrap(controller.window)
+        window.orderFrontRegardless()
+        defer { window.orderOut(nil) }
+        let root = try XCTUnwrap(window.contentView)
+        root.layoutSubtreeIfNeeded()
+        try addSite("TCP 端口", in: root)
+        func field(_ name: String) throws -> NSTextField {
+            try XCTUnwrap(view(root) { (f: NSTextField) in f.accessibilityLabel() == name })
+        }
+        func type(_ value: String, into field: NSTextField) {
+            field.stringValue = value
+            field.delegate?.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: field))
+        }
+        type("nas", into: try field("TCP 主机"))
+        let port = try field("TCP 端口")
+        let apply = try XCTUnwrap(view(root) { (b: NSButton) in b.title == "应用" })
+        type("65536", into: port)
+        apply.performClick(nil)
+        XCTAssertTrue(saved.isEmpty)
+        XCTAssertTrue(port.currentEditor() === window.firstResponder)
+        type("445", into: port)
+        apply.performClick(nil)
+        var site = try XCTUnwrap(saved.last)
+        XCTAssertFalse(site.enabled)
+        XCTAssertEqual(site.endpoint, .tcp(host: "nas", port: 445))
+        XCTAssertEqual(site.name, "nas")
+        XCTAssertEqual(site.lanes, [.fresh])
+        XCTAssertEqual(site.fresh.interval, 10)
+        XCTAssertFalse(site.daily.enabled)
+        let menu = try XCTUnwrap(SiteProbeCommand.menuItem(for: site, target: controller, action: NSSelectorFromString("performSiteProbeCommand:")).submenu)
+        XCTAssertFalse(menu.items.contains { $0.title.contains("复用") || $0.title == "停止探测" })
+        let low = try XCTUnwrap(menu.items.first { $0.title.hasPrefix("低频") })
+        XCTAssertFalse(low.title.contains("KB") || low.title.contains("MB"))
+        try XCTUnwrap(low.representedObject as? SiteProbeCommand).apply(to: &site)
+        XCTAssertFalse(site.enabled)
+        XCTAssertEqual(site.fresh.interval, 30)
+        try XCTUnwrap(menu.item(withTitle: "启用此站点")?.representedObject as? SiteProbeCommand).apply(to: &site)
+        XCTAssertTrue(site.enabled)
+        let config = ProbeConfiguration(probingEnabled: true, sites: ProbeSite.builtIns + [site])
+        let data = try JSONEncoder().encode(config)
+        XCTAssertEqual(try ProbeConfiguration.decode(data), config)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let sites = try XCTUnwrap(json["sites"] as? [[String: Any]])
+        let tcp = try XCTUnwrap(sites.last)
+        XCTAssertEqual(tcp["type"] as? String, "tcp")
+        for key in ["url", "method", "statusCodes", "daily"] { XCTAssertNil(tcp[key]) }
+        var legacy = Array(sites.dropLast().reversed())
+        for index in legacy.indices { legacy[index].removeValue(forKey: "type") }
+        let v2 = try JSONSerialization.data(withJSONObject: ["schemaVersion": 2, "probingEnabled": false, "sites": legacy])
+        let migrated = try ProbeConfiguration.decode(v2)
+        XCTAssertEqual(migrated.sites, Array(ProbeSite.builtIns.reversed()))
+        XCTAssertFalse(migrated.probingEnabled)
+        XCTAssertEqual(try ProbeEndpoint.tcpHost("[::1]"), "::1")
+        for invalid in ["", "smb://nas/share", "nas:445", "user@nas", "bad host", "nas..local"] {
+            XCTAssertThrowsError(try ProbeEndpoint.tcpHost(invalid))
+        }
+    }
+
+    func testTCPPersonalStrengthsAndMixedConnectionBudget() throws {
+        let draft = SiteDraft.new(type: .tcp)
+        draft.form.address = "nas"
+        draft.form.port = "445"
+        let values = StrengthValues(interval: 12, warning: 4, cutoff: 7, capacity: 1)
+        let strength = ProbeStrength(id: "personal", name: "家庭", values: values)
+        draft.form.personal[.fresh] = [StrengthInput(strength)]
+        var site = try draft.build()
+        try SiteProbeCommand(siteID: site.id, operation: .select(.fresh, strength.id)).apply(to: &site)
+        let edit = SiteDraft(site)
+        XCTAssertEqual(try edit.build().fresh.interval, 12)
+        XCTAssertTrue(edit.canRemoveStrength(strength.id, lane: .fresh))
+        edit.form.personal[.fresh] = []
+        XCTAssertFalse(edit.sync(site))
+        XCTAssertEqual(try edit.build()[strength: .fresh].selectedID, "balanced")
+        site.enabled = true
+        XCTAssertTrue(edit.sync(site))
+        XCTAssertFalse(edit.canRemoveStrength(strength.id, lane: .fresh))
+
+        var budget = ProbeBudget(lane: .fresh, interval: 10, type: .tcp)
+        XCTAssertEqual(budget.requests, 2880)
+        XCTAssertEqual(budget.trafficDisplay, "—")
+        let https = ProbeBudget(lane: .fresh, interval: 10)
+        budget.add(https)
+        XCTAssertEqual(budget.requests, 5760)
+        XCTAssertEqual(budget.bytes, https.bytes)
+        XCTAssertTrue(budget.display.contains("HTTPS 流量"))
+    }
+
+    @MainActor
+    func testTCPConnectionsCloseAndPublishRefusalAndSuccess() async throws {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        let listener = try NWListener(using: parameters)
+        var closed = 0
+        listener.newConnectionHandler = { peer in
+            peer.start(queue: .main)
+            peer.receive(minimumIncompleteLength: 1, maximumLength: 1) { data, _, ended, _ in
+                MainActor.assumeIsolated {
+                    XCTAssertTrue(data?.isEmpty ?? true)
+                    if ended { closed += 1 }
+                    peer.cancel()
+                }
+            }
+        }
+        listener.start(queue: .main)
+        defer { listener.cancel() }
+        try await waitUntil { listener.state == .ready }
+        let port = try XCTUnwrap(listener.port).rawValue
+        var site = ProbeSite(id: "tcp", name: "NAS", endpoint: .tcp(host: "127.0.0.1", port: port), enabled: false)
+        let clock = NetworkDelay()
+        let monitor = ConnectivityMonitor(sites: [site], now: { clock.time }, automaticTimer: false) {}
+        monitor.start()
+        defer { monitor.stop() }
+        clock.time = 10
+        monitor.pump()
+        XCTAssertEqual(monitor.state.color, .normal)
+        site.enabled = true
+        monitor.apply([site])
+        try await waitUntil { closed == 1 && monitor.state.color == .green }
+        XCTAssertEqual(monitor.state.rows[0].percentages, "—/100")
+        XCTAssertEqual(monitor.state.rate, "0 B/h")
+        XCTAssertTrue(monitor.state.footer.contains("HTTPS"))
+        listener.cancel()
+        try await waitUntil { listener.state == .cancelled }
+        clock.time += 10
+        monitor.pump()
+        try await waitUntil { monitor.state.rows[0].fresh == .connectionRefused }
+        XCTAssertEqual(monitor.state.rows[0].percentages, "—/50")
+        XCTAssertEqual(monitor.state.color, .red)
+        clock.time += 10
+        monitor.pump()
+        try await waitUntil { monitor.state.rows[0].freshCount.completed == 3 }
+        site.enabled = false
+        monitor.apply([site])
+        XCTAssertEqual(monitor.state.color, .normal)
+        XCTAssertEqual(monitor.state.rows[0].percentages, "—/—")
+    }
+
+    @MainActor
+    func testTCPCutoffAndCancellationAcrossNetworkChanges() async throws {
+        let clock = NetworkDelay()
+        var site = ProbeSite(id: "tcp", name: "Local", endpoint: .tcp(host: "127.0.0.1", port: 445), enabled: true)
+        let monitor = ConnectivityMonitor(sites: [site], now: { clock.time },
+            waitForNetwork: { await clock.wait() }, automaticTimer: false) {}
+        monitor.start()
+        defer { monitor.stop() }
+        // Advance the deadline before the main queue receives any native connection events.
+        clock.time = 10
+        monitor.pump()
+        XCTAssertEqual(monitor.state.rows[0].fresh, .timedOut)
+        XCTAssertEqual(monitor.state.rows[0].freshCount.completed, 1)
+        monitor.networkDidChange()
+        try await waitUntil { !clock.completions.isEmpty }
+        XCTAssertEqual(monitor.state.rows[0].freshCount.completed, 0)
+        site.enabled = false
+        monitor.apply([site])
+        clock.releaseFirst()
+        await Task.yield()
+        XCTAssertEqual(monitor.state.color, .normal)
+        XCTAssertEqual(monitor.state.rows[0].freshCount.completed, 0)
+        XCTAssertEqual(ProbeResult(tcpError: .dns(DNSServiceErrorType(kDNSServiceErr_NoSuchRecord))), .dnsFailed)
+        XCTAssertEqual(ProbeResult(tcpError: .posix(.ETIMEDOUT)), .timedOut)
+        XCTAssertEqual(ProbeResult(tcpError: .posix(.ENETUNREACH)), .connectionFailed)
+    }
+
+    @MainActor
     func testNativeGetStopsAtHeadersAndReusesBodylessConnections() async throws {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
@@ -1488,7 +1677,7 @@ final class NetRateTests: XCTestCase {
         defer { listener.cancel(); server.peers.forEach { $0.cancel() } }
         try await waitUntil { listener.state == .ready && (listener.port?.rawValue ?? 0) > 0 }
         let base = "http://127.0.0.1:\(try XCTUnwrap(listener.port).rawValue)"
-        var site = ProbeSite(id: "local", name: "Local", url: URL(string: base + "/empty")!, enabled: true, method: .get)
+        var site = ProbeSite(id: "local", name: "Local", endpoint: .https(URL(string: base + "/empty")!), enabled: true, method: .get)
         site.fresh.enabled = false
         let clock = NetworkDelay()
         let monitor = ConnectivityMonitor(sites: [site], now: { clock.time }, automaticTimer: false) {}
@@ -1502,10 +1691,10 @@ final class NetRateTests: XCTestCase {
         clock.time = 60
         let usage = monitor.estimate(for: [site]).sites[site.id]
         XCTAssertEqual(usage?.daily, Double(ProbeUsage.freshBytes + ProbeUsage.reusedBytes) * 60)
-        site.url = URL(string: base + "/stream")!
+        site.endpoint = .https(URL(string: base + "/stream")!)
         monitor.apply([site])
         try await waitUntil { monitor.state.rows[0].percentages == "100/—" }
-        site.url = URL(string: base + "/redirect")!
+        site.endpoint = .https(URL(string: base + "/redirect")!)
         monitor.apply([site])
         try await waitUntil { monitor.state.rows[0].daily == .wrongStatus(302) }
         XCTAssertEqual(server.paths, ["/empty", "/empty", "/stream", "/redirect"])
@@ -1590,7 +1779,7 @@ final class NetRateTests: XCTestCase {
         let expected = ProbeConfiguration(probingEnabled: false, sites: sites)
         XCTAssertEqual(store.configuration, expected)
         let migrated = try String(contentsOf: url, encoding: .utf8)
-        XCTAssertTrue(migrated.contains("\"schemaVersion\" : 2"))
+        XCTAssertTrue(migrated.contains("\"schemaVersion\" : 3"))
         XCTAssertTrue(migrated.contains("https://github.com/"))
 
         let reopened = ProbeConfigurationStore(url: url, defaults: defaults)
@@ -1639,7 +1828,7 @@ final class NetRateTests: XCTestCase {
         config.sites[0][strength: .fresh].selectedID = "balanced"
         try store.save(config)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
-        XCTAssertEqual(json["schemaVersion"] as? Int, 2)
+        XCTAssertEqual(json["schemaVersion"] as? Int, 3)
         XCTAssertEqual(try store.read().configuration, config)
         XCTAssertEqual(config.sites[0][strength: .fresh].personal.first?.values.cutoff, 8)
 
@@ -1741,7 +1930,7 @@ final class NetRateTests: XCTestCase {
         invalid.sites = Array(updated.sites.dropFirst())
         XCTAssertThrowsError(try ProbeConfiguration.decode(JSONEncoder().encode(invalid)))
         invalid.sites = updated.sites
-        invalid.sites[0].url = URL(string: "https://example.com/")!
+        invalid.sites[0].endpoint = .https(URL(string: "https://example.com/")!)
         XCTAssertThrowsError(try ProbeConfiguration.decode(JSONEncoder().encode(invalid)))
 
         if geteuid() != 0 {

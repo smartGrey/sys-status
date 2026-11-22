@@ -48,5 +48,7 @@
 	<true/>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>网速需要连接你启用的局域网探测目标，以检测服务端口是否可达。</string>
 </dict>
 </plist>

@@ -1,19 +1,23 @@
 import Foundation
+import Network
 
 private protocol ProbeTask: AnyObject { func cancel() }
 extension URLSessionTask: ProbeTask {}
 extension HeaderTask: ProbeTask {}
+extension NWConnection: ProbeTask {}
 
 @MainActor
 final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
     private enum Transport {
-        case urlSession(URLSession)
-        case headers(HeaderSession)
+        case urlSession(URLSession, URL)
+        case headers(HeaderSession, URL)
+        case tcp(NWConnection)
 
         var identity: ObjectIdentifier {
             switch self {
-            case .urlSession(let session): ObjectIdentifier(session)
-            case .headers(let session): ObjectIdentifier(session)
+            case .urlSession(let session, _): ObjectIdentifier(session)
+            case .headers(let session, _): ObjectIdentifier(session)
+            case .tcp(let connection): ObjectIdentifier(connection)
             }
         }
     }
@@ -114,7 +118,7 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
     var state: ConnectivityState {
         let time = now()
         let rows = sites.map { site in
-            ConnectivityState.Row(id: site.settings.id, name: site.settings.name, enabled: site.settings.enabled,
+            ConnectivityState.Row(id: site.settings.id, name: site.settings.name, enabled: site.settings.enabled, isTCP: site.settings.endpoint.type == .tcp,
                                   daily: site.daily.result, fresh: site.fresh.result,
                                   dailySettings: site.settings[.daily], freshSettings: site.settings[.fresh],
                                   dailyCount: site.daily.history.count(at: time), freshCount: site.fresh.history.count(at: time))
@@ -128,7 +132,7 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
 
     private func traffic(for draft: ProbeSite, live: Site?, at time: TimeInterval) -> SiteTraffic {
         var traffic = SiteTraffic()
-        guard draft.enabled else { return traffic }
+        guard draft.enabled, draft.endpoint.type == .https else { return traffic }
         for kind in ProbeLane.allCases where draft[kind].enabled {
             let baseline = ProbeUsage.baseline(kind, interval: draft[kind].interval)
             if enabled, let live, live.settings.enabled, draft.sharesRequest(with: live.settings),
@@ -144,7 +148,7 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
     func estimate(for draft: [ProbeSite]) -> ProbeEstimate {
         let existing = Dictionary(uniqueKeysWithValues: sites.map { ($0.settings.id, $0) })
         let time = now()
-        var estimate = ProbeEstimate(enabled: enabled)
+        var estimate = ProbeEstimate(enabled: enabled, includesTCP: draft.contains { $0.endpoint.type == .tcp })
         for item in draft { estimate.sites[item.id] = traffic(for: item, live: existing[item.id], at: time) }
         return estimate
     }
@@ -169,7 +173,7 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
 
     private func retire(_ lane: Lane) {
         lane.active = false
-        if case .urlSession(let session) = lane.session { session.invalidateAndCancel() }
+        if case .urlSession(let session, _) = lane.session { session.invalidateAndCancel() }
         lane.session = nil
         for attempt in requests.values where attempt.lane === lane { attempt.task.cancel() }
     }
@@ -241,7 +245,7 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
             if !attempt.settled { wake = min(wake, attempt.deadline) }
         }
         for site in sites where site.settings.enabled {
-            for kind in ProbeLane.allCases where site.settings[kind].enabled {
+            for kind in site.settings.lanes where site.settings[kind].enabled {
                 let capacity = site.settings[kind].capacity
                 let lane = site[kind]
                 guard (occupied[site.settings.id]?[kind] ?? 0) < capacity else { continue }
@@ -259,28 +263,43 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
         let lane = site[kind]
         let reused = lane.session != nil
         let session: Transport
-        if let existing = lane.session {
-            session = existing
-        } else if configuration == nil && site.settings.method == .get {
-            session = .headers(HeaderSession())
-        } else {
-            let config = configuration?(kind) ?? .ephemeral
-            config.urlCache = nil
-            config.httpCookieStorage = nil
-            config.requestCachePolicy = .reloadIgnoringLocalCacheData
-            config.httpMaximumConnectionsPerHost = site.settings[kind].capacity
-            config.timeoutIntervalForRequest = Double(site.settings[kind].cutoff)
-            config.timeoutIntervalForResource = config.timeoutIntervalForRequest
-            session = .urlSession(URLSession(configuration: config, delegate: self, delegateQueue: .main))
+        switch site.settings.endpoint {
+        case let .tcp(host, port):
+            let parameters = NWParameters.tcp
+            // Follow the service route (including VPNs) even when a system web/SOCKS proxy is active.
+            parameters.preferNoProxies = true
+            session = .tcp(NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!, using: parameters))
+        case let .https(url):
+            if let existing = lane.session {
+                session = existing
+            } else if configuration == nil && site.settings.method == .get {
+                session = .headers(HeaderSession(), url)
+            } else {
+                let config = configuration?(kind) ?? .ephemeral
+                config.urlCache = nil
+                config.httpCookieStorage = nil
+                config.requestCachePolicy = .reloadIgnoringLocalCacheData
+                config.httpMaximumConnectionsPerHost = site.settings[kind].capacity
+                config.timeoutIntervalForRequest = Double(site.settings[kind].cutoff)
+                config.timeoutIntervalForResource = config.timeoutIntervalForRequest
+                session = .urlSession(URLSession(configuration: config, delegate: self, delegateQueue: .main), url)
+            }
+            if kind == .daily { lane.session = session }
         }
-        if kind == .daily { lane.session = session }
         let time = now()
         lane.issued += 1
         lane.next = time + Double(site.settings[kind].interval)
         let attempt = Attempt(session: session, site: site, kind: kind, at: time, reused: reused)
         switch session {
-        case .headers(let headers):
-            attempt.task = headers.get(site.settings.url, timeout: Double(site.settings[kind].cutoff)) {
+        case .tcp(let connection):
+            attempt.task = connection
+            let id = ObjectIdentifier(connection)
+            connection.stateUpdateHandler = { [weak self] state in
+                MainActor.assumeIsolated { self?.tcpStateDidChange(state, id: id) }
+            }
+            connection.start(queue: .main)
+        case let .headers(headers, url):
+            attempt.task = headers.get(url, timeout: Double(site.settings[kind].cutoff)) {
                 [weak self, weak attempt] status, reusedConnection, timedOut in
                 guard let self, let attempt else { return }
                 attempt.reused = reusedConnection
@@ -292,8 +311,8 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
                 }
                 complete(attempt)
             }
-        case .urlSession(let urlSession):
-            var request = URLRequest(url: site.settings.url)
+        case let .urlSession(urlSession, url):
+            var request = URLRequest(url: url)
             request.httpMethod = site.settings.method.rawValue
             let task = urlSession.dataTask(with: request)
             attempt.task = task
@@ -305,9 +324,29 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
         return attempt
     }
 
+    private func tcpStateDidChange(_ state: NWConnection.State, id: ObjectIdentifier) {
+        guard let attempt = requests[id] else { return }
+        let time = now()
+        switch state {
+        case .ready:
+            settle(.success(max(0, time - attempt.start)), for: attempt, at: time)
+            attempt.task.cancel()
+        case .waiting(let error):
+            // Each sample gets one connection attempt. The scheduler owns retries.
+            settle(ProbeResult(tcpError: error), for: attempt, at: time)
+            attempt.task.cancel()
+        case .failed(let error):
+            settle(ProbeResult(tcpError: error), for: attempt, at: time)
+            complete(attempt)
+        case .cancelled:
+            complete(attempt)
+        default: break
+        }
+    }
+
     private func retireConnection(of attempt: Attempt) {
         guard attempt.lane.session?.identity == attempt.session.identity else { return }
-        if case .urlSession(let session) = attempt.session { session.finishTasksAndInvalidate() }
+        if case .urlSession(let session, _) = attempt.session { session.finishTasksAndInvalidate() }
         attempt.lane.session = nil
     }
 
@@ -330,7 +369,7 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
 
     private func receive(_ response: URLResponse?, for attempt: Attempt) {
         let time = now()
-        guard let http = response as? HTTPURLResponse, http.url == attempt.site.settings.url else {
+        guard let http = response as? HTTPURLResponse, http.url == attempt.site.settings.endpoint.httpsURL else {
             settle(.failed, for: attempt, at: time)
             return
         }
@@ -391,11 +430,13 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
     }
 
     private func complete(_ attempt: Attempt) {
-        requests.removeValue(forKey: ObjectIdentifier(attempt.task))
+        guard requests.removeValue(forKey: ObjectIdentifier(attempt.task)) != nil else { return }
         let id = attempt.site.settings.id
         occupied[id]?[attempt.kind]? -= 1
         if occupied[id]?.values.allSatisfy({ $0 == 0 }) == true { occupied.removeValue(forKey: id) }
-        if attempt.lane.active { attempt.lane.usage.record(at: now(), reused: attempt.reused) }
+        if attempt.lane.active, attempt.site.settings.endpoint.type == .https {
+            attempt.lane.usage.record(at: now(), reused: attempt.reused)
+        }
         pump()
     }
 }

@@ -73,8 +73,18 @@ final class SiteSettingsWindow: NSWindowController, NSWindowDelegate, NSTableVie
         let widths: [SiteColumn: CGFloat] = [.name: 198, .method: 90, .codes: 154]
         for key in SiteColumn.allCases {
             let column = NSTableColumn(identifier: .init(key.rawValue))
-            column.title = key == .name ? "站点名称" : key.topic.rawValue
-            column.headerToolTip = key.topic.tip()
+            switch key {
+            case .name: column.title = "站点名称"
+            case .address: column.title = "地址或主机"
+            case .method: column.title = "方法 / 协议"
+            case .codes: column.title = "成功状态码 / 端口"
+            }
+            column.headerToolTip = switch key {
+            case .address: "HTTPS 填完整网址，TCP 填主机名或 IP 地址。"
+            case .codes: "HTTPS 填成功状态码，TCP 填服务端口。"
+            case .method: "HTTPS 可选择请求方法，TCP 检查能否建立连接。"
+            case .name: key.topic.tip()
+            }
             column.width = widths[key] ?? max(220, width - 486)
             column.minWidth = key == .address ? 190 : column.width
             column.resizingMask = key == .address ? .autoresizingMask : []
@@ -94,10 +104,12 @@ final class SiteSettingsWindow: NSWindowController, NSWindowDelegate, NSTableVie
         scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
 
-        let add = NSButton(title: "新增站点", target: self, action: #selector(addSite))
+        let add = NSPopUpButton(frame: .zero, pullsDown: true)
+        add.addItem(withTitle: "新增站点")
+        add.menu?.addItem(withTitle: "HTTPS", action: #selector(addHTTPS), keyEquivalent: "").target = self
+        add.menu?.addItem(withTitle: "TCP 端口", action: #selector(addTCP), keyEquivalent: "").target = self
         let cancel = NSButton(title: "取消", target: self, action: #selector(cancelChanges))
         cancel.keyEquivalent = "\u{1b}"
-        save.keyEquivalent = "\r"
         apply.toolTip = "保存并应用修改，继续编辑。"
         apply.setAccessibilityHelp(apply.toolTip)
         let actions = NSStackView(views: [add, remove, up, down, help.makeButton(), NSView(), cancel, apply, save])
@@ -240,14 +252,15 @@ final class SiteSettingsWindow: NSWindowController, NSWindowDelegate, NSTableVie
     private func refreshBudget() {
         var total = ProbeBudget()
         for draft in drafts where draft.source.enabled {
-            for lane in ProbeLane.allCases where draft.source[strength: lane].enabled {
+            for lane in draft.source.lanes where draft.source[strength: lane].enabled {
                 guard let strength = draft.selected(lane) else {
                     footer.stringValue = "全部站点合计 · 请先完成探测强度参数"
                     return
                 }
-                total.add(.init(lane: lane, interval: strength.values.interval))
+                total.add(.init(lane: lane, interval: strength.values.interval, type: draft.source.endpoint.type))
             }
         }
+        total.includesTCP = drafts.contains { $0.source.endpoint.type == .tcp }
         footer.stringValue = "全部站点合计 · " + (probingEnabled ? "预计 8 小时　" : "恢复探测后预计 8 小时　") + total.display
     }
 
@@ -269,8 +282,11 @@ final class SiteSettingsWindow: NSWindowController, NSWindowDelegate, NSTableVie
         if message != nil { NSAccessibility.post(element: feedback, notification: .valueChanged) }
     }
 
-    @objc private func addSite() {
-        let draft = SiteDraft.new()
+    @objc private func addHTTPS() { addSite(.https) }
+    @objc private func addTCP() { addSite(.tcp) }
+
+    private func addSite(_ type: ProbeSiteType) {
+        let draft = SiteDraft.new(type: type)
         drafts.append(draft)
         updateRows(selecting: draft, scroll: true)
         editor(for: draft).focus(.address)

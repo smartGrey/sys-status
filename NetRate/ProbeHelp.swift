@@ -15,6 +15,7 @@ struct FieldHelp {
 enum HelpField: String, CaseIterable {
     case global = "探测总开关", siteEnabled = "站点启用", name = "名称", address = "HTTPS 地址"
     case method = "请求方法", codes = "成功状态码", laneEnabled = "类型启用", type = "探测类型"
+    case host = "TCP 主机", port = "TCP 端口"
     case intensity = "探测强度"
     case interval = "发起间隔", warning = "告警时间", cutoff = "截止时间", capacity = "并发", traffic = "预计流量"
 
@@ -32,6 +33,10 @@ enum HelpField: String, CaseIterable {
         case .address:
             return FieldHelp("填写要检测的完整 HTTPS 地址，探测只检查原地址的直接响应。",
                              "可包含路径和查询参数。请去掉网址中的账号、密码和 # 后的页面锚点。", .history)
+        case .host:
+            return FieldHelp("填写服务的主机名或 IP 地址，例如 nas。", "优先直连，按 Mac 当前的名称解析和路由连接目标。访问 Tailscale 设备时，可填写 Finder 使用的主机名。", .history)
+        case .port:
+            return FieldHelp("填写 1–65535 的服务端口，例如 SMB 使用 445。", "每次新建 TCP 连接，成功后立即关闭。此探测无需登录；共享目录的访问权限需在 Finder 中验证。", .success)
         case .method:
             return FieldHelp("HEAD 请求响应头。选 GET 时，收到响应头即可判定结果。",
                              "复用与新建共用此设置。自定义站点默认使用 HEAD。如果服务只支持 GET，可以在这里切换。", .history)
@@ -56,7 +61,7 @@ enum HelpField: String, CaseIterable {
             return FieldHelp("这一类最多能同时有几条请求在途。名额满时，下一轮会等到有空位再发。",
                              "填写正整数。内置强度中，只有新建快速允许 2 条在途，其他强度为 1 条。正在取消的请求会占用名额，直到连接释放。", .schedule)
         case .traffic:
-            return FieldHelp("按连续运行 8 小时、正常响应估算请求数和流量。",
+            return FieldHelp("按连续运行 8 小时估算探测次数，流量仅估算 HTTPS。",
                              "满额等待或睡眠会减少请求数。复用遇到重连时流量会增加。配置窗口合计只纳入已勾选站点开启的方式。", .cost)
         }
     }
@@ -89,7 +94,7 @@ enum HelpRule: String, CaseIterable {
     var summary: String {
         switch self {
         case .schedule: "间隔决定何时尝试发起，并发决定是否有空位。满额时只保留一次待发机会，释放名额后发出一条，再从那一刻计时。"
-        case .colors: "可以。告警后、截止前收到预期状态码，仍计为成功，耗时显示为橙色。表中「复用」指两类都开启时的复用探测。"
+        case .colors: "可以。告警后、截止前收到预期 HTTPS 状态码或建立 TCP 连接，仍计为成功，耗时显示为橙色。表中「复用」指两类都开启时的复用探测。"
         case .success: "圆点反映当前状态。成功率只统计最近 5 分钟已有最终结果的请求，左右分别是复用和新建。刚告警的请求还在等待，先前全部成功时仍会显示 100%。"
         case .cost: "流量按发起请求的类型归账。一次复用探测需要重新建连时，握手开销也记入复用列。"
         case .history: "每个站点的两类探测分别统计。菜单选择立即生效。配置窗口的修改在保存后生效。"

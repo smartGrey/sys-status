@@ -1,4 +1,5 @@
 import Foundation
+import Network
 
 private extension CodingUserInfoKey {
     static let configurationVersion = CodingUserInfoKey(rawValue: "configurationVersion")!
@@ -150,10 +151,48 @@ enum ProbeMethod: String, Codable, CaseIterable {
     case head = "HEAD", get = "GET"
 }
 
+enum ProbeSiteType: String, Codable {
+    case https, tcp
+}
+
+enum ProbeEndpoint: Equatable {
+    case https(URL)
+    case tcp(host: String, port: UInt16)
+
+    var type: ProbeSiteType {
+        switch self {
+        case .https: .https
+        case .tcp: .tcp
+        }
+    }
+
+    var httpsURL: URL? {
+        if case let .https(url) = self { return url }
+        return nil
+    }
+
+    static func tcpHost(_ input: String) throws -> String {
+        var host = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        if host.contains(":") {
+            if host.hasPrefix("["), host.hasSuffix("]") { host = String(host.dropFirst().dropLast()) }
+            guard IPv6Address(host) != nil else { throw SiteConfigurationError.invalidHost }
+        } else {
+            let name = host.hasSuffix(".") ? String(host.dropLast()) : host
+            let labels = name.components(separatedBy: ".")
+            let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+            guard !name.isEmpty, name.utf8.count <= 253, labels.allSatisfy({
+                (1...63).contains($0.utf8.count) && $0.unicodeScalars.allSatisfy(allowed.contains)
+            }) else { throw SiteConfigurationError.invalidHost }
+        }
+        return host
+    }
+}
+
 struct ProbeSite: Codable, Equatable, Identifiable {
     let id: String
     var name: String
-    var url: URL
+    var endpoint: ProbeEndpoint
+    var lanes: [ProbeLane] { endpoint.type == .tcp ? [.fresh] : ProbeLane.allCases }
     var enabled: Bool
     var statusCodes = StatusCodes()
 
@@ -175,21 +214,30 @@ struct ProbeSite: Codable, Equatable, Identifiable {
     var hasEnabledLane: Bool { dailyStrength.enabled || freshStrength.enabled }
 
     func validate() throws {
-        for lane in ProbeLane.allCases { try self[strength: lane].validate(for: lane) }
+        if case let .tcp(host, port) = endpoint {
+            guard try ProbeEndpoint.tcpHost(host) == host else { throw SiteConfigurationError.invalidHost }
+            guard port > 0 else { throw SiteConfigurationError.invalidPort }
+            guard !dailyStrength.enabled, freshStrength.enabled else { throw SiteConfigurationError.invalidTCPLane }
+        }
+        for lane in lanes { try self[strength: lane].validate(for: lane) }
         guard !enabled || hasEnabledLane else { throw SiteConfigurationError.noLane }
     }
 
     func sharesRequest(with other: Self) -> Bool {
-        url == other.url && method == other.method && statusCodes == other.statusCodes
+        endpoint == other.endpoint && method == other.method && statusCodes == other.statusCodes
     }
 
-    private enum CodingKeys: String, CodingKey { case id, name, url, enabled, statusCodes, method, daily, fresh }
+    private enum CodingKeys: String, CodingKey { case id, name, type, url, host, port, enabled, statusCodes, method, daily, fresh }
     private enum LegacyKey: String, CodingKey { case expectedStatusCode }
 
-    init(id: String, name: String, url: URL, enabled: Bool, method: ProbeMethod = .head, statusCodes: StatusCodes = StatusCodes()) {
+    init(id: String, name: String, endpoint: ProbeEndpoint, enabled: Bool, method: ProbeMethod = .head, statusCodes: StatusCodes = StatusCodes()) {
         self.id = id
         self.name = name
-        self.url = url
+        self.endpoint = endpoint
+        if endpoint.type == .tcp {
+            dailyStrength = LaneStrength(enabled: false, selectedID: "balanced")
+            freshStrength = LaneStrength(selectedID: "balanced")
+        }
         self.enabled = enabled
         self.method = method
         self.statusCodes = statusCodes
@@ -198,27 +246,32 @@ struct ProbeSite: Codable, Equatable, Identifiable {
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         let migrating = decoder.userInfo[.legacyProbeSites] as? Bool == true
-        let rules: String
-        if migrating {
-            let legacy = try decoder.container(keyedBy: LegacyKey.self)
-            rules = try values.decodeIfPresent(String.self, forKey: .statusCodes)
-                ?? legacy.decodeIfPresent(Int.self, forKey: .expectedStatusCode).map(String.init) ?? ""
-        } else {
-            rules = try values.decode(String.self, forKey: .statusCodes)
+        let version = decoder.userInfo[.configurationVersion] as? Int
+        let type: ProbeSiteType = migrating || (version ?? 3) < 3 ? .https : try values.decode(ProbeSiteType.self, forKey: .type)
+        let endpoint: ProbeEndpoint
+        switch type {
+        case .https: endpoint = .https(try values.decode(URL.self, forKey: .url))
+        case .tcp:
+            let host = try values.decode(String.self, forKey: .host)
+            endpoint = .tcp(host: try ProbeEndpoint.tcpHost(host), port: try values.decode(UInt16.self, forKey: .port))
         }
-        let codes: StatusCodes
-        do {
-            codes = try StatusCodes(rules)
-        } catch {
-            throw DecodingError.dataCorruptedError(forKey: .statusCodes, in: values, debugDescription: error.localizedDescription)
+        try self.init(id: values.decode(String.self, forKey: .id), name: values.decode(String.self, forKey: .name),
+                      endpoint: endpoint, enabled: values.decode(Bool.self, forKey: .enabled))
+        if type == .https {
+            let rules: String
+            if migrating {
+                let legacy = try decoder.container(keyedBy: LegacyKey.self)
+                rules = try values.decodeIfPresent(String.self, forKey: .statusCodes)
+                    ?? legacy.decodeIfPresent(Int.self, forKey: .expectedStatusCode).map(String.init) ?? ""
+            } else {
+                rules = try values.decode(String.self, forKey: .statusCodes)
+            }
+            do { statusCodes = try StatusCodes(rules) }
+            catch { throw DecodingError.dataCorruptedError(forKey: .statusCodes, in: values, debugDescription: error.localizedDescription) }
+            method = try migrating ? values.decodeIfPresent(ProbeMethod.self, forKey: .method) ?? (isBuiltIn ? .get : .head)
+                                   : values.decode(ProbeMethod.self, forKey: .method)
         }
-        try self.init(id: values.decode(String.self, forKey: .id),
-                      name: values.decode(String.self, forKey: .name),
-                      url: values.decode(URL.self, forKey: .url),
-                      enabled: values.decode(Bool.self, forKey: .enabled), statusCodes: codes)
-        method = try migrating ? values.decodeIfPresent(ProbeMethod.self, forKey: .method) ?? (isBuiltIn ? .get : .head)
-                               : values.decode(ProbeMethod.self, forKey: .method)
-        for lane in ProbeLane.allCases {
+        for lane in lanes {
             let key: CodingKeys = lane == .daily ? .daily : .fresh
             if migrating || decoder.userInfo[.configurationVersion] as? Int == 1 {
                 let p = try migrating ? values.decodeIfPresent(ProbeParameters.self, forKey: key) ?? lane.legacyDefaults
@@ -234,17 +287,24 @@ struct ProbeSite: Codable, Equatable, Identifiable {
         var values = encoder.container(keyedBy: CodingKeys.self)
         try values.encode(id, forKey: .id)
         try values.encode(name, forKey: .name)
-        try values.encode(url, forKey: .url)
         try values.encode(enabled, forKey: .enabled)
-        try values.encode(statusCodes.text, forKey: .statusCodes)
-        try values.encode(method, forKey: .method)
-        try values.encode(dailyStrength, forKey: .daily)
+        try values.encode(endpoint.type, forKey: .type)
+        switch endpoint {
+        case let .https(url):
+            try values.encode(url, forKey: .url)
+            try values.encode(statusCodes.text, forKey: .statusCodes)
+            try values.encode(method, forKey: .method)
+            try values.encode(dailyStrength, forKey: .daily)
+        case let .tcp(host, port):
+            try values.encode(host, forKey: .host)
+            try values.encode(port, forKey: .port)
+        }
         try values.encode(freshStrength, forKey: .fresh)
     }
 
     static let builtIns = [
-        ProbeSite(id: "google", name: "Google", url: URL(string: "https://www.google.com/generate_204")!, enabled: true, method: .get),
-        ProbeSite(id: "cloudflare", name: "Cloudflare", url: URL(string: "https://cp.cloudflare.com/generate_204")!, enabled: true, method: .get)
+        ProbeSite(id: "google", name: "Google", endpoint: .https(URL(string: "https://www.google.com/generate_204")!), enabled: true, method: .get),
+        ProbeSite(id: "cloudflare", name: "Cloudflare", endpoint: .https(URL(string: "https://cp.cloudflare.com/generate_204")!), enabled: true, method: .get)
     ]
 
     var isBuiltIn: Bool { Self.builtIns.contains { $0.id == id } }
@@ -257,7 +317,7 @@ struct ProbeSite: Codable, Equatable, Identifiable {
             throw SiteConfigurationError.invalidAddress
         }
         let label = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return Self(id: id, name: label.isEmpty ? host : label, url: url, enabled: enabled,
+        return Self(id: id, name: label.isEmpty ? host : label, endpoint: .https(url), enabled: enabled,
                     statusCodes: statusCodes)
     }
 
@@ -268,7 +328,7 @@ struct ProbeSite: Codable, Equatable, Identifiable {
 }
 
 enum SiteConfigurationError: LocalizedError {
-    case invalidAddress
+    case invalidAddress, invalidHost, invalidPort, invalidTCPLane
     case invalidStatusCode, invalidNumber, shortDeadline, noLane
 
     var errorDescription: String? {
@@ -276,6 +336,9 @@ enum SiteConfigurationError: LocalizedError {
         case .invalidNumber: "间隔、告警、截止和并发均须为正整数。"
         case .shortDeadline: "截止时间须大于或等于告警时间。"
         case .noLane: "已启用的站点至少需要开启一类探测。"
+        case .invalidHost: "请输入主机名或 IP 地址，例如 nas。"
+        case .invalidPort: "请输入 1–65535 之间的端口号。"
+        case .invalidTCPLane: "TCP 端口只支持新建连接。请通过站点开关控制探测。"
         case .invalidAddress: "请输入完整的 HTTPS 地址，地址中不能包含账号、密码或页面锚点。"
         case .invalidStatusCode: "请输入 200–599 或 2xx–5xx，多项用逗号分隔。"
         }
@@ -323,7 +386,8 @@ struct LegacySiteSettings {
                 for lane in ProbeLane.allCases { builtIn[strength: lane] = stored[strength: lane] }
                 site = builtIn
             } else {
-                guard var custom = try? ProbeSite.custom(id: stored.id, name: stored.name, address: stored.url.absoluteString,
+                guard case let .https(url) = stored.endpoint,
+                      var custom = try? ProbeSite.custom(id: stored.id, name: stored.name, address: url.absoluteString,
                                                          enabled: stored.enabled, statusCodes: stored.statusCodes) else { continue }
                 custom.method = stored.method
                 for lane in ProbeLane.allCases { custom[strength: lane] = stored[strength: lane] }
@@ -339,7 +403,7 @@ struct LegacySiteSettings {
 }
 
 struct ProbeConfiguration: Codable, Equatable {
-    static let version = 2
+    static let version = 3
     var schemaVersion = Self.version
     var probingEnabled: Bool
     var sites: [ProbeSite]
@@ -350,7 +414,7 @@ struct ProbeConfiguration: Codable, Equatable {
         let decoder = JSONDecoder()
         do {
             let version = try decoder.decode(Version.self, from: data).schemaVersion
-            guard version == 1 || version == Self.version else { throw ConfigurationFileError.unsupportedVersion(version) }
+            guard (1...Self.version).contains(version) else { throw ConfigurationFileError.unsupportedVersion(version) }
             decoder.userInfo[.configurationVersion] = version
             var configuration = try decoder.decode(Self.self, from: data)
             configuration.schemaVersion = Self.version
@@ -383,11 +447,13 @@ struct ProbeConfiguration: Codable, Equatable {
                 try site.validate()
                 if let builtIn = ProbeSite.builtIns.first(where: { $0.id == site.id }) {
                     let codesMatch = site.statusCodes == builtIn.statusCodes || site.statusCodes.text == "204"
-                    guard site.name == builtIn.name, site.url == builtIn.url, site.method == builtIn.method, codesMatch else {
+                    guard site.name == builtIn.name, site.endpoint == builtIn.endpoint, site.method == builtIn.method, codesMatch else {
                         throw ConfigurationFileError.invalid("内置站点的名称、地址、方法和成功状态码是固定的。")
                     }
                 } else {
-                    _ = try ProbeSite.custom(id: site.id, name: site.name, address: site.url.absoluteString)
+                    if case let .https(url) = site.endpoint {
+                        _ = try ProbeSite.custom(id: site.id, name: site.name, address: url.absoluteString)
+                    }
                     guard !site.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                         throw ConfigurationFileError.invalid("站点名称不能为空。")
                     }

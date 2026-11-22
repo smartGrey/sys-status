@@ -1,11 +1,11 @@
 import AppKit
 
 enum SiteFormField: Hashable {
-    case address, codes, personalName(ProbeLane, String), number(ProbeLane, String, Int)
+    case address, port, codes, personalName(ProbeLane, String), number(ProbeLane, String, Int)
 
     var lane: ProbeLane? {
         switch self {
-        case .address, .codes: nil
+        case .address, .port, .codes: nil
         case let .personalName(lane, _), let .number(lane, _, _): lane
         }
     }
@@ -49,14 +49,20 @@ struct SiteForm: Equatable {
     var address: String
     var method: ProbeMethod
     var codes: String
+    var port = ""
     var personal: [ProbeLane: [StrengthInput]]
 
     init(_ site: ProbeSite) {
         name = site.name
-        address = site.url.absoluteString
+        switch site.endpoint {
+        case let .https(url): address = url.absoluteString
+        case let .tcp(host, number):
+            address = host
+            if number > 0 { port = String(number) }
+        }
         method = site.method
         codes = site.isBuiltIn ? "204" : site.statusCodes.text
-        personal = Dictionary(uniqueKeysWithValues: ProbeLane.allCases.map { ($0, site[strength: $0].personal.map(StrengthInput.init)) })
+        personal = Dictionary(uniqueKeysWithValues: site.lanes.map { ($0, site[strength: $0].personal.map(StrengthInput.init)) })
     }
 }
 
@@ -80,8 +86,9 @@ final class SiteDraft {
         savedForm = form
     }
 
-    static func new() -> SiteDraft {
-        var site = ProbeSite(id: UUID().uuidString, name: "", url: URL(string: "about:blank")!, enabled: false)
+    static func new(type: ProbeSiteType = .https) -> SiteDraft {
+        let endpoint: ProbeEndpoint = type == .https ? .https(URL(string: "about:blank")!) : .tcp(host: "", port: 0)
+        var site = ProbeSite(id: UUID().uuidString, name: "", endpoint: endpoint, enabled: false)
         site[strength: .daily] = LaneStrength(enabled: false, selectedID: "balanced")
         site[strength: .fresh] = LaneStrength(selectedID: "balanced")
         let draft = SiteDraft(site)
@@ -94,9 +101,9 @@ final class SiteDraft {
     func sync(_ live: ProbeSite) -> Bool {
         source = live
         var restored = false
-        for lane in ProbeLane.allCases {
+        for lane in live.lanes {
             let selection = live[strength: lane]
-            if selection.enabled,
+            if protectsSelection(lane),
                let selected = selection.personal.first(where: { $0.id == selection.selectedID }),
                form.personal[lane]?.contains(where: { $0.id == selected.id }) != true {
                 form.personal[lane, default: []].append(StrengthInput(selected))
@@ -108,7 +115,18 @@ final class SiteDraft {
 
     func build() throws -> ProbeSite {
         var site = source
-        if !site.isBuiltIn {
+        if site.endpoint.type == .tcp {
+            let host: String
+            do { host = try ProbeEndpoint.tcpHost(form.address) }
+            catch { throw SiteInputError(field: .address, cause: error) }
+            let number = form.port.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let port = UInt16(number), port > 0 else {
+                throw SiteInputError(field: .port, cause: SiteConfigurationError.invalidPort)
+            }
+            site.endpoint = .tcp(host: host, port: port)
+            let label = form.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            site.name = label.isEmpty ? host : label
+        } else if !site.isBuiltIn {
             let codes: StatusCodes
             do { codes = try StatusCodes(form.codes) }
             catch { throw SiteInputError(field: .codes, cause: error) }
@@ -117,11 +135,11 @@ final class SiteDraft {
                 endpoint = try ProbeSite.custom(id: id, name: form.name, address: form.address, enabled: site.enabled, statusCodes: codes)
             } catch { throw SiteInputError(field: .address, cause: error) }
             site.name = endpoint.name
-            site.url = endpoint.url
+            site.endpoint = endpoint.endpoint
             site.method = form.method
             site.statusCodes = endpoint.statusCodes
         }
-        for lane in ProbeLane.allCases {
+        for lane in site.lanes {
             site[strength: lane].personal = try (form.personal[lane] ?? []).map { try $0.strength(for: lane) }
             site[strength: lane].selectedID = selectedID(lane)
             do { try site[strength: lane].validate(for: lane) }
@@ -136,16 +154,19 @@ final class SiteDraft {
     func selectedID(_ lane: ProbeLane) -> String {
         let selection = source[strength: lane]
         // The file still requires a valid selection when a probe is stopped.
-        if !selection.enabled, selection.personal.contains(where: { $0.id == selection.selectedID }),
+        if !protectsSelection(lane), selection.personal.contains(where: { $0.id == selection.selectedID }),
            form.personal[lane]?.contains(where: { $0.id == selection.selectedID }) != true {
             return "balanced"
         }
         return selection.selectedID
     }
 
+    private func protectsSelection(_ lane: ProbeLane) -> Bool {
+        source.endpoint.type == .tcp ? source.enabled : source[strength: lane].enabled
+    }
+
     func canRemoveStrength(_ id: String, lane: ProbeLane) -> Bool {
-        let selection = source[strength: lane]
-        return !selection.enabled || selection.selectedID != id
+        !protectsSelection(lane) || source[strength: lane].selectedID != id
     }
 
     func selected(_ lane: ProbeLane) -> ProbeStrength? {
@@ -156,6 +177,7 @@ final class SiteDraft {
 
     var title: String {
         if !form.name.isEmpty { return form.name }
+        if source.endpoint.type == .tcp, !form.address.isEmpty { return form.address }
         return URLComponents(string: form.address)?.host ?? "新增站点"
     }
 }
@@ -287,8 +309,10 @@ final class SiteEditor: NSView {
     func siteCell(_ column: SiteColumn) -> NSView {
         if let cell = cells[column] { return cell }
         let locked = draft.source.isBuiltIn
-        func input(_ key: WritableKeyPath<SiteForm, String>, _ placeholder: String) -> NSTextField {
-            let field = FormField(draft.form[keyPath: key], label: column.topic.rawValue, topic: column.topic, locked: locked) { [weak self] value in
+        let tcp = draft.source.endpoint.type == .tcp
+        func input(_ key: WritableKeyPath<SiteForm, String>, _ placeholder: String, topic: HelpField? = nil) -> NSTextField {
+            let topic = topic ?? column.topic
+            let field = FormField(draft.form[keyPath: key], label: topic.rawValue, topic: topic, locked: locked) { [weak self] value in
                 self?.draft.form[keyPath: key] = value
                 self?.changed()
             }
@@ -311,9 +335,13 @@ final class SiteEditor: NSView {
             line.distribution = .fill
             control = line
         case .address:
-            let field = input(\.address, "https://example.com/")
+            let field = input(\.address, tcp ? "主机名或 IP" : "https://example.com/", topic: tcp ? .host : .address)
             fields[.address] = field
             control = field
+        case .method where tcp:
+            let label = text("TCP")
+            HelpField.host.attach(to: label)
+            control = label
         case .method where locked:
             let method = text(draft.form.method.rawValue)
             method.setAccessibilityLabel(column.topic.rawValue)
@@ -328,6 +356,10 @@ final class SiteEditor: NSView {
             method.setAccessibilityLabel(column.topic.rawValue)
             column.topic.attach(to: method, readOnly: locked)
             control = method
+        case .codes where tcp:
+            let field = input(\.port, "1–65535", topic: .port)
+            fields[.port] = field
+            control = field
         case .codes:
             let field = input(\.codes, "2xx")
             fields[.codes] = field
@@ -353,7 +385,7 @@ final class SiteEditor: NSView {
         arrow?.state = draft.expanded ? .on : .off
         arrow?.setAccessibilityLabel("展开或折叠" + draft.title)
         if let addressField {
-            let hint = HelpField.address.tip(readOnly: draft.source.isBuiltIn)
+            let hint = (draft.source.endpoint.type == .tcp ? HelpField.host : .address).tip(readOnly: draft.source.isBuiltIn)
             addressField.toolTip = draft.form.address.isEmpty ? hint : draft.form.address + "\n" + hint
         }
     }
@@ -406,7 +438,7 @@ final class SiteEditor: NSView {
         addMenus.removeAll()
         personalRows.removeAll()
         if draft.expanded {
-            let columns = ["", "当前强度", "间隔 (秒)", "提醒 (秒)", "截止 (秒)", "并发", "8 小时请求数", "预计流量", ""]
+            let columns = ["", "当前强度", "间隔 (秒)", "提醒 (秒)", "截止 (秒)", "并发", draft.source.endpoint.type == .tcp ? "8 小时连接数" : "8 小时请求数", "预计流量", ""]
             let help: [HelpField?] = [nil, .intensity, .interval, .warning, .cutoff, .capacity, .traffic, .traffic, nil]
             let header = columns.enumerated().map { i, title in
                 let label = text(title, secondary: true)
@@ -416,7 +448,7 @@ final class SiteEditor: NSView {
                 return label
             }
             gridRow(header, height: 18)
-            for lane in ProbeLane.allCases { laneRow(lane) }
+            for lane in draft.source.lanes { laneRow(lane) }
         }
         refresh()
     }
@@ -550,14 +582,15 @@ final class SiteEditor: NSView {
 
     func refresh() {
         updateSite()
-        for lane in ProbeLane.allCases {
+        let tcp = draft.source.endpoint.type == .tcp
+        for lane in draft.source.lanes {
             guard let labels = laneLabels[lane], let menu = addMenus[lane]?.menu else { continue }
             updateTemplates(for: lane, menu: menu)
             let selected = draft.source[strength: lane]
             let id = draft.selectedID(lane)
             let input = draft.form.personal[lane]?.first { $0.id == id }
                 ?? lane.strengths.first { $0.id == id }.map(StrengthInput.init)
-            let budget = selected.enabled ? draft.selected(lane).map { ProbeBudget(lane: lane, interval: $0.values.interval) } : ProbeBudget()
+            let budget = selected.enabled ? draft.selected(lane).map { ProbeBudget(lane: lane, interval: $0.values.interval, type: draft.source.endpoint.type) } : ProbeBudget()
             let title = (selected.enabled ? "" : "已停止 · ") + (input?.name ?? "—")
             let values = [title] + (input?.numbers ?? Array(repeating: "—", count: 4)) +
                 [budget?.requests.formatted() ?? "—", budget?.trafficDisplay ?? "—"]
@@ -571,7 +604,7 @@ final class SiteEditor: NSView {
                 label.setAccessibilityLabel(lane.title + "当前" + topic.rawValue)
             }
             labels[0].toolTip = title + "\n" + HelpField.intensity.tip()
-            labels[5].setAccessibilityLabel(lane.title + "预计 8 小时请求数")
+            labels[5].setAccessibilityLabel(lane.title + (tcp ? "预计 8 小时连接数" : "预计 8 小时请求数"))
             labels[6].setAccessibilityLabel(lane.title + "预计 8 小时流量")
             if selected.enabled && !draft.source.enabled {
                 for label in labels.suffix(2) { label.toolTip = "启用此站点后，连续探测 8 小时的估算。" }
@@ -580,11 +613,11 @@ final class SiteEditor: NSView {
                 guard let row = personalRows[lane]?[input.id] else { continue }
                 let chosen = input.id == selected.selectedID
                 row.mark.stringValue = chosen ? (selected.enabled ? "个人 · 已选" : "个人 · 已保留") : "个人"
-                let budget = (try? input.strength(for: lane)).map { ProbeBudget(lane: lane, interval: $0.values.interval) }
+                let budget = (try? input.strength(for: lane)).map { ProbeBudget(lane: lane, interval: $0.values.interval, type: draft.source.endpoint.type) }
                 row.count.stringValue = budget?.requests.formatted() ?? "—"
                 row.traffic.stringValue = budget?.trafficDisplay ?? "—"
                 row.remove.isEnabled = draft.canRemoveStrength(input.id, lane: lane)
-                row.remove.toolTip = row.remove.isEnabled ? nil : "先在菜单中停止该方式或切换探测强度，再删除。"
+                row.remove.toolTip = row.remove.isEnabled ? nil : (tcp ? "先在菜单中停用此站点或切换探测强度，再删除。" : "先在菜单中停止该方式或切换探测强度，再删除。")
             }
         }
     }

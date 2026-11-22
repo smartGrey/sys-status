@@ -1,8 +1,20 @@
 import Foundation
+import Network
+import dnssd
 
 enum ArrowColor { case normal, green, orange, red }
 enum ProbeResult: Equatable {
     case checking, waiting, success(TimeInterval), timedOut, wrongStatus(Int), failed
+    case dnsFailed, connectionRefused, connectionFailed
+
+    init(tcpError: NWError) {
+        switch tcpError {
+        case .posix(.ECONNREFUSED): self = .connectionRefused
+        case .posix(.ETIMEDOUT), .dns(DNSServiceErrorType(kDNSServiceErr_Timeout)): self = .timedOut
+        case .dns: self = .dnsFailed
+        default: self = .connectionFailed
+        }
+    }
 
     var text: String {
         switch self {
@@ -10,6 +22,9 @@ enum ProbeResult: Equatable {
         case .waiting: "等待中"
         case .timedOut: "超时"
         case .failed: "失败"
+        case .dnsFailed: "域名解析失败"
+        case .connectionRefused: "连接被拒绝"
+        case .connectionFailed: "连接失败"
         case .wrongStatus(let code): String(code)
         case .success(let seconds):
             seconds < 1 ? "\(Int((seconds * 1000).rounded())) ms" : String(format: "%.1f s", seconds)
@@ -111,26 +126,38 @@ struct ProbeUsage {
 struct ProbeBudget: Equatable {
     var requests = 0
     var bytes = 0.0
+    var includesTCP = false
+    private var includesHTTPS = false
 
     init() {}
 
-    init(lane: ProbeLane, interval: Int) {
+    init(lane: ProbeLane, interval: Int, type: ProbeSiteType = .https) {
         requests = 1 + (28_800 - 1) / interval
+        includesTCP = type == .tcp
+        guard !includesTCP else { return }
+        includesHTTPS = true
         bytes = Double(requests) * Double(lane == .daily ? ProbeUsage.reusedBytes : ProbeUsage.freshBytes)
     }
 
     mutating func add(_ other: Self) {
         requests += other.requests
         bytes += other.bytes
+        includesTCP = includesTCP || other.includesTCP
+        includesHTTPS = includesHTTPS || other.includesHTTPS
     }
 
     var trafficDisplay: String {
+        if includesTCP && !includesHTTPS { return "—" }
         let unit = bytes >= 1_000_000 ? (1_000_000.0, "MB") : (1_000.0, "KB")
         let amount = (bytes / unit.0).formatted(.number.precision(.significantDigits(1...3)))
         return "\(amount) \(unit.1)"
     }
 
-    var display: String { "\(requests.formatted()) 次 · \(trafficDisplay)" }
+    var display: String {
+        let count = "\(requests.formatted()) 次"
+        if includesTCP && !includesHTTPS { return count }
+        return count + (includesTCP ? " · HTTPS 流量 " : " · ") + trafficDisplay
+    }
 }
 
 struct SiteTraffic: Equatable {
@@ -146,10 +173,11 @@ struct SiteTraffic: Equatable {
 struct ProbeEstimate {
     var sites: [String: SiteTraffic] = [:]
     var enabled: Bool
+    var includesTCP = false
 
     var total: Double { sites.values.reduce(0) { $0 + $1.daily + $1.fresh } }
     var footer: String {
-        "全部站点合计 · " + (enabled ? "预计流量 " : "开启后预计 ") + (total > 0 ? "≈ " : "") + ProbeUsage.display(total)
+        "全部站点合计 · " + (includesTCP ? "仅 HTTPS · " : "") + (enabled ? "预计流量 " : "开启后预计 ") + (total > 0 ? "≈ " : "") + ProbeUsage.display(total)
     }
 }
 
@@ -158,6 +186,7 @@ struct ConnectivityState: Equatable {
         let id: String
         let name: String
         let enabled: Bool
+        var isTCP = false
         var daily = ProbeResult.checking
         var fresh = ProbeResult.checking
 
@@ -193,6 +222,7 @@ struct ConnectivityState: Equatable {
 
         var spoken: String {
             guard enabled else { return "\(name)，已停用" }
+            if isTCP { return "\(name)，TCP 新建连接 \(fresh.spoken)，近 5 分钟成功率 \(freshCount.spoken)" }
             let results = "复用 " + (dailySettings.enabled ? daily.spoken : "已关闭") +
                 "，新建 " + (freshSettings.enabled ? fresh.spoken : "已关闭")
             return "\(name)，\(results)，近 5 分钟复用成功率 " + (dailySettings.enabled ? dailyCount.spoken : "已关闭") +
@@ -229,7 +259,10 @@ struct ConnectivityState: Equatable {
         }
     }
 
-    var footer: String { "预计探测流量 " + (rate == "0 B/h" ? "" : "≈ ") + rate }
+    var footer: String {
+        let label = rows.contains(where: \.isTCP) ? "预计 HTTPS 探测流量 " : "预计探测流量 "
+        return label + (rate == "0 B/h" ? "" : "≈ ") + rate
+    }
     var summary: String { ([title] + (enabled ? rows.map(\.spoken) : []) + [footer]).joined(separator: " · ") }
     var hoverTooltip: String { ([title] + (enabled ? rows.map(\.detail) : []) + [footer]).joined(separator: "\n") }
 }
