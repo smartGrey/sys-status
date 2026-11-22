@@ -1,5 +1,10 @@
 import Foundation
 
+private extension CodingUserInfoKey {
+    static let configurationVersion = CodingUserInfoKey(rawValue: "configurationVersion")!
+    static let legacyProbeSites = CodingUserInfoKey(rawValue: "legacyProbeSites")!
+}
+
 struct StatusCodes: Equatable {
     private var codes: [Int] = []
     init() {}
@@ -32,7 +37,8 @@ enum ProbeLane: CaseIterable {
     case daily, fresh
 
     var title: String { self == .daily ? "复用" : "新建" }
-    var defaults: ProbeParameters {
+    var defaults: ProbeParameters { strengths[0].values.parameters() }
+    var legacyDefaults: ProbeParameters {
         self == .daily ? .init(interval: 2, warning: 5, cutoff: 5, capacity: 1)
                        : .init(interval: 6, warning: 5, cutoff: 10, capacity: 2)
     }
@@ -63,6 +69,83 @@ struct ProbeParameters: Codable, Equatable {
     }
 }
 
+struct StrengthValues: Codable, Equatable {
+    var interval: Int
+    var warning: Int
+    var cutoff: Int
+    var capacity: Int
+
+    func parameters(enabled: Bool = true) -> ProbeParameters {
+        ProbeParameters(enabled: enabled, interval: interval, warning: warning, cutoff: cutoff, capacity: capacity)
+    }
+}
+
+struct ProbeStrength: Codable, Equatable, Identifiable {
+    let id: String
+    var name: String
+    var values: StrengthValues
+}
+
+extension ProbeLane {
+    private static func builtIns(_ lane: Self, intervals: [Int]) -> [ProbeStrength] {
+        let names = [("fast", "快速"), ("balanced", "均衡"), ("gentle", "温和"), ("low", "低频")]
+        return zip(names, intervals).map { entry, interval in
+            ProbeStrength(id: entry.0, name: entry.1, values: .init(interval: interval, warning: 5,
+                cutoff: lane == .daily ? 8 : 10, capacity: lane == .fresh && entry.0 == "fast" ? 2 : 1))
+        }
+    }
+    private static let reuseStrengths = builtIns(.daily, intervals: [2, 5, 10, 20])
+    private static let freshStrengths = builtIns(.fresh, intervals: [6, 10, 15, 30])
+    var strengths: [ProbeStrength] { self == .daily ? Self.reuseStrengths : Self.freshStrengths }
+}
+
+struct InvalidStrengthIdentity: LocalizedError {
+    let id: String
+    var errorDescription: String? { "个人强度的名称和 ID 需非空，且在本站同一种方式内唯一。" }
+}
+
+struct LaneStrength: Codable, Equatable {
+    var enabled = true
+    var selectedID = "fast"
+    var personal: [ProbeStrength] = []
+
+    init(enabled: Bool = true, selectedID: String = "fast", personal: [ProbeStrength] = []) {
+        self.enabled = enabled
+        self.selectedID = selectedID
+        self.personal = personal
+    }
+
+    init(migrating p: ProbeParameters, lane: ProbeLane) {
+        let values = StrengthValues(interval: p.interval, warning: p.warning, cutoff: p.cutoff, capacity: p.capacity)
+        if let match = lane.strengths.first(where: { $0.values == values }) {
+            self.init(enabled: p.enabled, selectedID: match.id)
+        } else {
+            let original = ProbeStrength(id: "original", name: "原有配置", values: values)
+            self.init(enabled: p.enabled, selectedID: original.id, personal: [original])
+        }
+    }
+
+    func selected(in lane: ProbeLane) -> ProbeStrength? {
+        lane.strengths.first { $0.id == selectedID } ?? personal.first { $0.id == selectedID }
+    }
+
+    func validate(for lane: ProbeLane) throws {
+        var ids = Set(lane.strengths.map(\.id))
+        var names = Set(lane.strengths.map(\.name))
+        for item in personal {
+            let name = item.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !item.id.isEmpty, ids.insert(item.id).inserted, !name.isEmpty,
+                  names.insert(name.lowercased()).inserted else {
+                throw InvalidStrengthIdentity(id: item.id)
+            }
+            try item.values.parameters().validate()
+        }
+        guard ids.contains(selectedID) else {
+            throw ConfigurationFileError.invalid("选中的探测强度不存在，请先在菜单中切换强度。")
+        }
+    }
+}
+
 enum ProbeMethod: String, Codable, CaseIterable {
     case head = "HEAD", get = "GET"
 }
@@ -75,18 +158,25 @@ struct ProbeSite: Codable, Equatable, Identifiable {
     var statusCodes = StatusCodes()
 
     var method: ProbeMethod = .head
-    var daily = ProbeLane.daily.defaults
-    var fresh = ProbeLane.fresh.defaults
+    private var dailyStrength = LaneStrength()
+    private var freshStrength = LaneStrength()
 
-    subscript(_ kind: ProbeLane) -> ProbeParameters {
-        get { kind == .daily ? daily : fresh }
-        set { if kind == .daily { daily = newValue } else { fresh = newValue } }
+    subscript(strength kind: ProbeLane) -> LaneStrength {
+        get { kind == .daily ? dailyStrength : freshStrength }
+        set { if kind == .daily { dailyStrength = newValue } else { freshStrength = newValue } }
     }
 
+    subscript(_ kind: ProbeLane) -> ProbeParameters {
+        let selection = self[strength: kind]
+        // Decoding and editor saves both validate references before the monitor receives them.
+        return selection.selected(in: kind)!.values.parameters(enabled: selection.enabled)
+    }
+
+    var hasEnabledLane: Bool { dailyStrength.enabled || freshStrength.enabled }
+
     func validate() throws {
-        try daily.validate()
-        try fresh.validate()
-        guard !enabled || daily.enabled || fresh.enabled else { throw SiteConfigurationError.noLane }
+        for lane in ProbeLane.allCases { try self[strength: lane].validate(for: lane) }
+        guard !enabled || hasEnabledLane else { throw SiteConfigurationError.noLane }
     }
 
     func sharesRequest(with other: Self) -> Bool {
@@ -107,17 +197,37 @@ struct ProbeSite: Codable, Equatable, Identifiable {
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        let legacy = try decoder.container(keyedBy: LegacyKey.self)
-        let rules = try values.decodeIfPresent(String.self, forKey: .statusCodes)
-            ?? legacy.decodeIfPresent(Int.self, forKey: .expectedStatusCode).map(String.init) ?? ""
+        let migrating = decoder.userInfo[.legacyProbeSites] as? Bool == true
+        let rules: String
+        if migrating {
+            let legacy = try decoder.container(keyedBy: LegacyKey.self)
+            rules = try values.decodeIfPresent(String.self, forKey: .statusCodes)
+                ?? legacy.decodeIfPresent(Int.self, forKey: .expectedStatusCode).map(String.init) ?? ""
+        } else {
+            rules = try values.decode(String.self, forKey: .statusCodes)
+        }
+        let codes: StatusCodes
+        do {
+            codes = try StatusCodes(rules)
+        } catch {
+            throw DecodingError.dataCorruptedError(forKey: .statusCodes, in: values, debugDescription: error.localizedDescription)
+        }
         try self.init(id: values.decode(String.self, forKey: .id),
                       name: values.decode(String.self, forKey: .name),
                       url: values.decode(URL.self, forKey: .url),
-                      enabled: values.decode(Bool.self, forKey: .enabled), statusCodes: StatusCodes(rules))
-        method = try values.decodeIfPresent(ProbeMethod.self, forKey: .method) ?? (isBuiltIn ? .get : .head)
-        daily = try values.decodeIfPresent(ProbeParameters.self, forKey: .daily) ?? ProbeLane.daily.defaults
-        fresh = try values.decodeIfPresent(ProbeParameters.self, forKey: .fresh) ?? ProbeLane.fresh.defaults
-        try validate()
+                      enabled: values.decode(Bool.self, forKey: .enabled), statusCodes: codes)
+        method = try migrating ? values.decodeIfPresent(ProbeMethod.self, forKey: .method) ?? (isBuiltIn ? .get : .head)
+                               : values.decode(ProbeMethod.self, forKey: .method)
+        for lane in ProbeLane.allCases {
+            let key: CodingKeys = lane == .daily ? .daily : .fresh
+            if migrating || decoder.userInfo[.configurationVersion] as? Int == 1 {
+                let p = try migrating ? values.decodeIfPresent(ProbeParameters.self, forKey: key) ?? lane.legacyDefaults
+                                      : values.decode(ProbeParameters.self, forKey: key)
+                self[strength: lane] = LaneStrength(migrating: p, lane: lane)
+            } else {
+                self[strength: lane] = try values.decode(LaneStrength.self, forKey: key)
+            }
+        }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -128,8 +238,8 @@ struct ProbeSite: Codable, Equatable, Identifiable {
         try values.encode(enabled, forKey: .enabled)
         try values.encode(statusCodes.text, forKey: .statusCodes)
         try values.encode(method, forKey: .method)
-        try values.encode(daily, forKey: .daily)
-        try values.encode(fresh, forKey: .fresh)
+        try values.encode(dailyStrength, forKey: .daily)
+        try values.encode(freshStrength, forKey: .fresh)
     }
 
     static let builtIns = [
@@ -172,49 +282,209 @@ enum SiteConfigurationError: LocalizedError {
     }
 }
 
-struct SiteSettings {
-    var defaults: UserDefaults = .standard
+struct LegacySiteSettings {
+    let defaults: UserDefaults
     private let key = "NetRate.ProbeSites.v1"
 
     var probingEnabled: Bool {
-        get { defaults.object(forKey: "NetRate.ProbingEnabled") as? Bool ?? true }
-        nonmutating set { defaults.set(newValue, forKey: "NetRate.ProbingEnabled") }
+        defaults.object(forKey: "NetRate.ProbingEnabled") as? Bool ?? true
     }
 
     private struct StoredSite: Decodable {
         let site: ProbeSite?
-        init(from decoder: Decoder) { site = try? ProbeSite(from: decoder) }
+        init(from decoder: Decoder) {
+            site = try? {
+                let site = try ProbeSite(from: decoder)
+                try site.validate()
+                return site
+            }()
+        }
     }
 
     func load() -> [ProbeSite] {
+        let decoder = JSONDecoder()
+        decoder.userInfo[.legacyProbeSites] = true
+        let previousBuiltIns = ProbeSite.builtIns.map { site in
+            var old = site
+            for lane in ProbeLane.allCases { old[strength: lane] = LaneStrength(migrating: lane.legacyDefaults, lane: lane) }
+            return old
+        }
         guard let data = defaults.data(forKey: key),
-              let records = try? JSONDecoder().decode([StoredSite].self, from: data) else { return ProbeSite.builtIns }
+              let records = try? decoder.decode([StoredSite].self, from: data) else {
+            return defaults.object(forKey: key) == nil && defaults.object(forKey: "NetRate.ProbingEnabled") == nil
+                ? ProbeSite.builtIns : previousBuiltIns
+        }
         var sites: [ProbeSite] = []
         var ids = Set<String>()
         for stored in records.compactMap(\.site) where !ids.contains(stored.id) {
             let site: ProbeSite
             if var builtIn = ProbeSite.builtIns.first(where: { $0.id == stored.id }) {
                 builtIn.enabled = stored.enabled
-                builtIn.daily = stored.daily
-                builtIn.fresh = stored.fresh
+                for lane in ProbeLane.allCases { builtIn[strength: lane] = stored[strength: lane] }
                 site = builtIn
             } else {
                 guard var custom = try? ProbeSite.custom(id: stored.id, name: stored.name, address: stored.url.absoluteString,
                                                          enabled: stored.enabled, statusCodes: stored.statusCodes) else { continue }
                 custom.method = stored.method
-                custom.daily = stored.daily
-                custom.fresh = stored.fresh
+                for lane in ProbeLane.allCases { custom[strength: lane] = stored[strength: lane] }
                 site = custom
             }
             sites.append(site)
             ids.insert(site.id)
         }
         // Older records can omit built-ins. Only insert those missing from the saved order.
-        return ProbeSite.builtIns.filter { !ids.contains($0.id) } + sites
+        return previousBuiltIns.filter { !ids.contains($0.id) } + sites
     }
 
-    func save(_ sites: [ProbeSite]) throws {
-        for site in sites { try site.validate() }
-        defaults.set(try JSONEncoder().encode(sites), forKey: key)
+}
+
+struct ProbeConfiguration: Codable, Equatable {
+    static let version = 2
+    var schemaVersion = Self.version
+    var probingEnabled: Bool
+    var sites: [ProbeSite]
+
+    private struct Version: Decodable { let schemaVersion: Int }
+
+    static func decode(_ data: Data) throws -> Self {
+        let decoder = JSONDecoder()
+        do {
+            let version = try decoder.decode(Version.self, from: data).schemaVersion
+            guard version == 1 || version == Self.version else { throw ConfigurationFileError.unsupportedVersion(version) }
+            decoder.userInfo[.configurationVersion] = version
+            var configuration = try decoder.decode(Self.self, from: data)
+            configuration.schemaVersion = Self.version
+            try configuration.validate()
+            return configuration
+        } catch DecodingError.keyNotFound(let key, let context) {
+            throw ConfigurationFileError.invalid("缺少字段 " + fieldPath(context.codingPath + [key]) + "。")
+        } catch DecodingError.typeMismatch(_, let context), DecodingError.valueNotFound(_, let context) {
+            throw ConfigurationFileError.invalid("字段 " + fieldPath(context.codingPath) + " 的值无效。")
+        } catch DecodingError.dataCorrupted(let context) {
+            let field = context.codingPath.isEmpty ? "JSON 格式错误" : fieldPath(context.codingPath)
+            throw ConfigurationFileError.invalid(field + "：" + context.debugDescription)
+        }
+    }
+
+    private static func fieldPath(_ keys: [any CodingKey]) -> String {
+        keys.map { key in key.intValue.map { "[\($0)]" } ?? key.stringValue }.joined(separator: ".")
+            .replacingOccurrences(of: ".[", with: "[")
+    }
+
+    func validate() throws {
+        guard schemaVersion == Self.version else { throw ConfigurationFileError.unsupportedVersion(schemaVersion) }
+        var ids = Set<String>()
+        for (index, site) in sites.enumerated() {
+            let field = "sites[\(index)]"
+            guard !site.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, ids.insert(site.id).inserted else {
+                throw ConfigurationFileError.invalid(field + " 的站点 ID 为空或重复。")
+            }
+            do {
+                try site.validate()
+                if let builtIn = ProbeSite.builtIns.first(where: { $0.id == site.id }) {
+                    let codesMatch = site.statusCodes == builtIn.statusCodes || site.statusCodes.text == "204"
+                    guard site.name == builtIn.name, site.url == builtIn.url, site.method == builtIn.method, codesMatch else {
+                        throw ConfigurationFileError.invalid("内置站点的名称、地址、方法和成功状态码是固定的。")
+                    }
+                } else {
+                    _ = try ProbeSite.custom(id: site.id, name: site.name, address: site.url.absoluteString)
+                    guard !site.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        throw ConfigurationFileError.invalid("站点名称不能为空。")
+                    }
+                }
+            } catch {
+                throw ConfigurationFileError.invalid(field + "（" + site.name + "）" + error.localizedDescription)
+            }
+        }
+        for builtIn in ProbeSite.builtIns where !ids.contains(builtIn.id) {
+            throw ConfigurationFileError.invalid("缺少内置站点 " + builtIn.name + "。可用 enabled 关闭该站点。")
+        }
+    }
+}
+
+enum ConfigurationFileError: LocalizedError {
+    case missing, changed, unsupportedVersion(Int), invalid(String), read(Error), write(Error)
+
+    var errorDescription: String? {
+        switch self {
+        case .missing: "找不到 config.json。请恢复配置文件后重新读取。"
+        case .changed: "配置文件已在外部修改。请先重新读取配置。"
+        case .unsupportedVersion(let version): "当前版本不支持配置文件格式 \(version)。"
+        case .invalid(let message): message
+        case .read(let error): "无法读取配置文件。\(error.localizedDescription)"
+        case .write(let error): "无法保存配置文件。\(error.localizedDescription)"
+        }
+    }
+}
+
+@MainActor
+final class ProbeConfigurationStore {
+    struct Snapshot {
+        let configuration: ProbeConfiguration
+        fileprivate let data: Data
+    }
+
+    let url: URL
+    private let defaults: UserDefaults
+    private let migrationKey = "NetRate.ConfigFileMigrated.v1"
+    private var snapshot: Snapshot?
+    var configuration: ProbeConfiguration? { snapshot?.configuration }
+
+    init(url: URL = URL.applicationSupportDirectory.appending(path: "NetRate/config.json"),
+         defaults: UserDefaults = .standard) {
+        self.url = url
+        self.defaults = defaults
+    }
+
+    func loadOnLaunch() throws {
+        do {
+            try accept(read())
+        } catch ConfigurationFileError.missing {
+            guard !defaults.bool(forKey: migrationKey) else { throw ConfigurationFileError.missing }
+            let legacy = LegacySiteSettings(defaults: defaults)
+            let initial = ProbeConfiguration(probingEnabled: legacy.probingEnabled, sites: legacy.load())
+            try write(initial)
+        }
+    }
+
+    func read() throws -> Snapshot {
+        let data = try readData()
+        return Snapshot(configuration: try ProbeConfiguration.decode(data), data: data)
+    }
+
+    func accept(_ candidate: Snapshot) throws {
+        guard try readData() == candidate.data else { throw ConfigurationFileError.changed }
+        snapshot = candidate
+        defaults.set(true, forKey: migrationKey)
+    }
+
+    func save(_ configuration: ProbeConfiguration) throws {
+        guard let snapshot, try readData() == snapshot.data else { throw ConfigurationFileError.changed }
+        try write(configuration)
+    }
+
+    private func readData() throws -> Data {
+        do {
+            return try Data(contentsOf: url)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            throw ConfigurationFileError.missing
+        } catch {
+            throw ConfigurationFileError.read(error)
+        }
+    }
+
+    private func write(_ configuration: ProbeConfiguration) throws {
+        try configuration.validate()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        let data = try encoder.encode(configuration) + Data([0x0A])
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            throw ConfigurationFileError.write(error)
+        }
+        snapshot = Snapshot(configuration: configuration, data: data)
+        defaults.set(true, forKey: migrationKey)
     }
 }

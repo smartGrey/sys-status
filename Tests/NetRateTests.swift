@@ -1,7 +1,36 @@
 import AppKit
 import Network
+import Security
 import Synchronization
 import XCTest
+
+private extension ProbeSite {
+    // Transport fixtures specify exact schedules independently of the product's built-in catalogue.
+    var daily: ProbeParameters {
+        get { self[.daily] }
+        set { self[strength: .daily] = LaneStrength(migrating: newValue, lane: .daily) }
+    }
+    var fresh: ProbeParameters {
+        get { self[.fresh] }
+        set { self[strength: .fresh] = LaneStrength(migrating: newValue, lane: .fresh) }
+    }
+    static var legacyGoogle: ProbeSite {
+        var site = builtIns[0]
+        site.daily = ProbeLane.daily.legacyDefaults
+        return site
+    }
+}
+
+private func legacySiteData(_ sites: [ProbeSite]) throws -> Data {
+    let objects: [[String: Any]] = try sites.map { site in
+        var record = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(site)) as? [String: Any])
+        for lane in ProbeLane.allCases {
+            record[lane == .daily ? "daily" : "fresh"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(site[lane]))
+        }
+        return record
+    }
+    return try JSONSerialization.data(withJSONObject: objects)
+}
 
 // Keep transport tests deterministic and independent of the developer's network.
 private class ProbeProtocol: URLProtocol, @unchecked Sendable {
@@ -71,7 +100,7 @@ private final class ProbeHarness {
     }, now: { [delay] in delay.time }, waitForNetwork: { [delay] in await delay.wait() },
        automaticTimer: false, onChange: {})
 
-    init(sites: [ProbeSite] = [ProbeSite.builtIns[0]]) {
+    init(sites: [ProbeSite] = [ProbeSite.legacyGoogle]) {
         self.sites = sites
         ProbeProtocol.onRequest = { [unowned self] probe in
             if probe is FreshProtocol { fresh.append(probe) } else { daily.append(probe) }
@@ -325,6 +354,93 @@ final class NetRateTests: XCTestCase {
     }
 
     @MainActor
+    func testSleepSwitchFollowsSystemAndSerializesWrites() async throws {
+        var actual: Bool? = false
+        var requests: [Bool] = []
+        var authorize: CheckedContinuation<Void, Error>?
+        var failures: [String] = []
+        let control = SystemSleepMenu(read: { actual }, write: { requested in
+            requests.append(requested)
+            try await withCheckedThrowingContinuation { authorize = $0 }
+        }, report: { failures.append($0) })
+        XCTAssertEqual(control.item.state, .off)
+        control.toggle()
+        control.refresh()
+        control.toggle()
+        XCTAssertFalse(control.item.isEnabled)
+        try await waitUntil { authorize != nil }
+        XCTAssertEqual(requests, [true])
+        authorize?.resume()
+        authorize = nil
+        // A successful command can return before the kernel has applied it.
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertFalse(control.item.isEnabled)
+        actual = true
+        try await waitUntil { control.item.isEnabled }
+        XCTAssertEqual(control.item.state, .on)
+
+        control.toggle()
+        try await waitUntil { authorize != nil }
+        authorize?.resume(throwing: CancellationError())
+        authorize = nil
+        try await waitUntil { control.item.isEnabled }
+        XCTAssertEqual(control.item.state, .on)
+        XCTAssertTrue(failures.isEmpty)
+        control.toggle()
+        try await waitUntil { authorize != nil }
+        actual = false
+        authorize?.resume()
+        try await waitUntil { control.item.isEnabled }
+        XCTAssertEqual(control.item.state, .off)
+        XCTAssertEqual(requests, [true, false, false])
+
+        actual = true
+        control.toggle() // The action shown in the open menu has already taken effect externally.
+        XCTAssertEqual(control.item.state, .on)
+        XCTAssertTrue(control.item.isEnabled)
+        actual = nil
+        control.refresh()
+        XCTAssertEqual(control.item.state, .mixed)
+        XCTAssertTrue(control.item.title.contains("状态待确认"))
+        XCTAssertFalse(control.item.isEnabled)
+        control.toggle()
+        actual = false
+        control.refresh()
+        XCTAssertTrue(control.item.isEnabled)
+        XCTAssertEqual(control.item.state, .off)
+        XCTAssertEqual(requests.count, 3)
+    }
+
+    @MainActor
+    func testSleepSwitchReportsFailedWritesAndReadsBackActualState() async throws {
+        var system: Bool? = true
+        var reports: [String] = []
+        var commandFails = true
+        let control = SystemSleepMenu(read: { system }, write: { _ in
+            if commandFails { throw CocoaError(.fileWriteNoPermission) }
+        }, report: { reports.append($0) })
+        control.toggle()
+        try await waitUntil { reports.count == 1 }
+        XCTAssertEqual(control.item.state, .on)
+        commandFails = false
+        control.toggle()
+        try await waitUntil { reports.count == 2 }
+        XCTAssertEqual(control.item.state, .on)
+        system = false
+        control.refresh()
+        XCTAssertEqual(control.item.state, .off)
+    }
+
+    func testSleepServiceRequirementsCompile() {
+        for identifier in [SleepService.appIdentifier, SleepService.label] {
+            let source = SleepService.signingRequirement(for: identifier, team: "ABCDEFGHIJ")
+            var requirement: SecRequirement?
+            XCTAssertEqual(SecRequirementCreateWithString(source as CFString, [], &requirement), errSecSuccess)
+            XCTAssertNotNil(requirement)
+        }
+    }
+
+    @MainActor
     func testHoverPanelStaysOnTheDisplayWithTheButton() {
         let size = NSSize(width: 148, height: 99)
         for screen in [
@@ -537,7 +653,7 @@ final class NetRateTests: XCTestCase {
         let h = ProbeHarness(sites: ProbeSite.builtIns)
         defer { h.stop() }
         try await waitUntil { h.daily.count == 2 && h.fresh.count == 2 }
-        h.advance(6)
+        h.advance(8)
         try await waitUntil { h.daily.count == 4 && h.fresh.count == 4 }
         let sessionsBeforeChange = h.sessions.count
         h.monitor.apply([custom])
@@ -806,48 +922,88 @@ final class NetRateTests: XCTestCase {
         return nil
     }
 
+    private func configurationDirectory() throws -> URL {
+        let directory = URL.temporaryDirectory.appending(path: "NetRateTests-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        addTeardownBlock { try FileManager.default.removeItem(at: directory) }
+        return directory
+    }
+
     @MainActor
     func testSiteWindowStagesChangesAndProtectsBuiltIns() throws {
         let custom = try ProbeSite.custom(name: "Example", address: "https://example.com/status")
         let sites = ProbeSite.builtIns + [custom]
-        var commits: [[ProbeSite]?] = []
-        func exercise(save: Bool) throws {
-            let monitor = ConnectivityMonitor(sites: sites, automaticTimer: false) {}
-            let editor = SiteSettingsWindow(sites: sites, estimate: monitor.estimate(for:)) { commits.append($0) }
-            let content = try XCTUnwrap(editor.window?.contentView)
-            XCTAssertEqual(editor.window?.title, "探测站点配置")
-            editor.window?.setContentSize(try XCTUnwrap(editor.window?.contentMinSize))
-            content.layoutSubtreeIfNeeded()
-            for title in ["新增站点", "编辑站点"] {
-                let button = try XCTUnwrap(view(content) { (b: NSButton) in b.title == title })
-                XCTAssertGreaterThanOrEqual(button.frame.width, button.intrinsicContentSize.width)
+        for shouldSave in [false, true] {
+            var commits: [[ProbeSite]] = []
+            var closed = false
+            let controller = SiteSettingsWindow(sites: sites, probingEnabled: true, didClose: { closed = true }) {
+                commits.append($0)
             }
-            let table = try XCTUnwrap(view(content) { (_: NSTableView) in true })
-            let remove = try XCTUnwrap(view(content) { (button: NSButton) in button.title == "删除" })
-            let edit = try XCTUnwrap(view(content) { (button: NSButton) in button.title == "编辑站点" })
-            let finish = try XCTUnwrap(view(content) { (button: NSButton) in button.title == (save ? "保存" : "取消") })
+            let root = try XCTUnwrap(controller.window?.contentView)
+            root.layoutSubtreeIfNeeded()
+            func button(_ title: String) throws -> NSButton { try XCTUnwrap(view(root) { (b: NSButton) in b.title == title }) }
+            let table = try XCTUnwrap(view(root) { (_: NSTableView) in true })
+            let remove = try button("删除站点")
             table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
             XCTAssertFalse(remove.isEnabled)
-            XCTAssertTrue(edit.isEnabled)
-            let cell = try XCTUnwrap(table.view(atColumn: 0, row: 0, makeIfNecessary: true))
-            let toggle = try XCTUnwrap(view(cell) { (_: NSButton) in true })
-            toggle.performClick(nil)
-            XCTAssertNotNil(view(content) { (label: NSTextField) in label.stringValue == monitor.estimate(for: Array(sites.dropFirst())).footer })
             table.selectRowIndexes(IndexSet(integer: 2), byExtendingSelection: false)
-            XCTAssertTrue(remove.isEnabled)
-            XCTAssertTrue(edit.isEnabled)
             remove.performClick(nil)
             XCTAssertEqual(table.numberOfRows, 2)
-            finish.performClick(nil)
+            try button(shouldSave ? "保存" : "取消").performClick(nil)
+            XCTAssertTrue(closed)
+            XCTAssertEqual(commits, shouldSave ? [ProbeSite.builtIns] : [])
         }
-        try exercise(save: false)
-        XCTAssertEqual(commits.count, 1)
-        XCTAssertNil(commits[0])
-        try exercise(save: true)
-        var expected = ProbeSite.builtIns
-        expected[0].enabled = false
-        XCTAssertEqual(commits.count, 2)
-        XCTAssertEqual(commits[1], expected)
+    }
+
+    @MainActor
+    func testApplyKeepsWindowOpenAndOnlyLaterEditsAreCancelled() throws {
+        let custom = try ProbeSite.custom(name: "Example", address: "https://example.com/status")
+        let sites = ProbeSite.builtIns + [custom]
+        let domain = "NetRateTests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let url = try configurationDirectory().appending(path: "config.json")
+        let store = ProbeConfigurationStore(url: url, defaults: defaults)
+        try store.loadOnLaunch()
+        try store.save(.init(probingEnabled: false, sites: sites))
+        var closed = false
+        let controller = SiteSettingsWindow(sites: sites, probingEnabled: false, didClose: { closed = true }) {
+            try store.save(.init(probingEnabled: false, sites: $0))
+        }
+        let window = try XCTUnwrap(controller.window)
+        window.setContentSize(window.contentMinSize)
+        window.orderFrontRegardless()
+        defer { window.orderOut(nil) }
+        let root = try XCTUnwrap(window.contentView)
+        root.layoutSubtreeIfNeeded()
+        func button(_ label: String, in area: NSView) throws -> NSButton {
+            try XCTUnwrap(view(area) { (button: NSButton) in button.title == label || button.accessibilityLabel() == label })
+        }
+        let table = try XCTUnwrap(view(root) { (_: NSTableView) in true })
+        let row = try XCTUnwrap(table.rowView(atRow: 2, makeIfNecessary: true))
+        try button("展开或折叠Example", in: row).performClick(nil)
+        let nameCell = try XCTUnwrap(table.view(atColumn: 0, row: 2, makeIfNecessary: true))
+        let name = try XCTUnwrap(view(nameCell) { (field: NSTextField) in field.accessibilityLabel() == "名称" })
+        func typeName(_ value: String) {
+            name.stringValue = value
+            name.delegate?.controlTextDidChange?(.init(name: NSControl.textDidChangeNotification, object: name))
+        }
+        let apply = try button("应用", in: root)
+        XCTAssertFalse(apply.isEnabled)
+        typeName(" Applied ")
+        XCTAssertTrue(apply.isEnabled)
+        apply.performClick(nil)
+        XCTAssertEqual(try store.read().configuration.sites.last?.name, "Applied")
+        XCTAssertTrue(window.isVisible)
+        XCTAssertFalse(closed)
+        XCTAssertFalse(apply.isEnabled)
+        XCTAssertEqual(table.numberOfRows, 4)
+        XCTAssertEqual(table.selectedRow, 2)
+        typeName("Draft")
+        XCTAssertTrue(apply.isEnabled)
+        try button("取消", in: root).performClick(nil)
+        XCTAssertTrue(closed)
+        XCTAssertEqual(try store.read().configuration.sites.last?.name, "Applied")
     }
 
     @MainActor
@@ -858,8 +1014,10 @@ final class NetRateTests: XCTestCase {
         let domain = "NetRateTests." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
         defer { defaults.removePersistentDomain(forName: domain) }
-        let settings = SiteSettings(defaults: defaults)
-        try settings.save(sites)
+        let url = try configurationDirectory().appending(path: "config.json")
+        let settings = ProbeConfigurationStore(url: url, defaults: defaults)
+        try settings.loadOnLaunch()
+        try settings.save(.init(probingEnabled: true, sites: sites))
         let h = ProbeHarness(sites: sites)
         defer { h.stop() }
         try await waitUntil { h.daily.count == 2 && h.fresh.count == 2 }
@@ -869,11 +1027,11 @@ final class NetRateTests: XCTestCase {
         let originalSessions = h.sessions
 
         func editOrder(save: Bool) throws {
-            let controller = SiteSettingsWindow(sites: settings.load(), estimate: h.monitor.estimate(for:)) { updated in
-                if let updated {
-                    try settings.save(updated)
-                    h.monitor.apply(updated)
-                }
+            let controller = SiteSettingsWindow(sites: try settings.read().configuration.sites,
+                                                probingEnabled: true) { updated in
+                let configuration = ProbeConfiguration(probingEnabled: true, sites: updated)
+                try settings.save(configuration)
+                h.monitor.apply(configuration)
             }
             let window = try XCTUnwrap(controller.window)
             let content = try XCTUnwrap(window.contentView)
@@ -898,19 +1056,19 @@ final class NetRateTests: XCTestCase {
             up.performClick(nil)
             XCTAssertEqual(table.selectedRow, 0)
             XCTAssertFalse(up.isEnabled)
-            let cell = try XCTUnwrap(table.view(atColumn: 1, row: 0, makeIfNecessary: true))
+            let cell = try XCTUnwrap(table.view(atColumn: 0, row: 0, makeIfNecessary: true))
             XCTAssertNotNil(view(cell) { (label: NSTextField) in label.stringValue == custom.name })
-            XCTAssertEqual(settings.load(), sites)
+            XCTAssertEqual(try settings.read().configuration.sites, sites)
             XCTAssertEqual(h.monitor.state.rows, originalRows)
             let done = try XCTUnwrap(view(content) { (button: NSButton) in button.title == (save ? "保存" : "取消") })
             done.performClick(nil)
         }
 
         try editOrder(save: false)
-        XCTAssertEqual(settings.load(), sites)
+        XCTAssertEqual(try settings.read().configuration.sites, sites)
         XCTAssertEqual(h.monitor.state.rows, originalRows)
         try editOrder(save: true)
-        XCTAssertEqual(SiteSettings(defaults: defaults).load(), expected)
+        XCTAssertEqual(try ProbeConfigurationStore(url: url, defaults: defaults).read().configuration.sites, expected)
         XCTAssertEqual(h.monitor.state.rows, Array(originalRows.reversed()))
         XCTAssertEqual(h.sessions, originalSessions)
         XCTAssertFalse(h.fresh.contains(where: \.stopped))
@@ -926,70 +1084,320 @@ final class NetRateTests: XCTestCase {
     }
 
     @MainActor
-    func testEditorPreviewsPerLaneValidatesAndDiscardsDrafts() async throws {
-        let site = ProbeSite.builtIns[0]
-        let monitor = ConnectivityMonitor(sites: [site], automaticTimer: false) {}
-        var committed: [ProbeSite]?
-        let controller = SiteSettingsWindow(sites: [site], estimate: monitor.estimate(for:)) { committed = $0 }
+    func testMenuControlsStrengthWhilePausedAndProtectsLastLane() throws {
+        var site = try ProbeSite.custom(name: "Example", address: "https://example.com", enabled: false)
+        site[strength: .daily].enabled = false
+        site[strength: .fresh].enabled = false
+        site[strength: .fresh].personal = [ProbeStrength(id: "work", name: "办公", values: ProbeLane.fresh.strengths[1].values)]
+        let selector = NSSelectorFromString("choose:")
+        func command(_ item: NSMenuItem) throws -> SiteProbeCommand { try XCTUnwrap(item.representedObject as? SiteProbeCommand) }
+        let parent = SiteProbeCommand.menuItem(for: site, target: self, action: selector)
+        let children = try XCTUnwrap(parent.submenu)
+        XCTAssertEqual(parent.state, .off)
+        XCTAssertFalse(try XCTUnwrap(children.item(withTitle: "启用此站点")).isEnabled)
+        XCTAssertFalse(children.items.contains(where: \.hasSubmenu))
+        let initiallyChecked = children.items.filter { $0.state == .on }
+        XCTAssertEqual(initiallyChecked.map(\.title), ["停止探测", "停止探测"])
+        let previous = site
+        try command(XCTUnwrap(initiallyChecked.first)).apply(to: &site)
+        XCTAssertEqual(site, previous)
+        XCTAssertNotNil(children.items.first { $0.title.hasPrefix("办公 · 10 秒") })
+        let balanced = try XCTUnwrap(children.items.first { $0.title.hasPrefix("均衡 · 10 秒") })
+        XCTAssertTrue(balanced.title.contains("20.2 MB"))
+        try command(balanced).apply(to: &site)
+        XCTAssertTrue(site.fresh.enabled)
+        XCTAssertFalse(site.enabled)
+        try SiteProbeCommand(siteID: site.id, operation: .toggleSite).apply(to: &site)
+        XCTAssertTrue(site.enabled)
+        XCTAssertThrowsError(try SiteProbeCommand(siteID: site.id, operation: .disable(.fresh)).apply(to: &site))
+        let checked = SiteProbeCommand.menuItem(for: site, target: self, action: selector)
+        XCTAssertEqual(checked.state, .on)
+        let lastStop = try XCTUnwrap(checked.submenu?.items.first { $0.accessibilityLabel() == "停止本站的新建探测" })
+        XCTAssertFalse(lastStop.isEnabled)
+        XCTAssertEqual(lastStop.state, .off)
+        XCTAssertEqual(lastStop.accessibilityLabel(), "停止本站的新建探测")
+        site[strength: .daily].enabled = true
+        let both = SiteProbeCommand.menuItem(for: site, target: self, action: selector)
+        let stops = try XCTUnwrap(both.submenu).items.filter { $0.title == "停止探测" }
+        XCTAssertEqual(stops.count, 2)
+        for (lane, stop) in zip(ProbeLane.allCases, stops) {
+            var copy = site
+            XCTAssertTrue(stop.isEnabled)
+            XCTAssertEqual(stop.state, .off)
+            XCTAssertTrue(try XCTUnwrap(stop.toolTip).contains(lane.title))
+            XCTAssertEqual(stop.accessibilityLabel(), "停止本站的" + lane.title + "探测")
+            try command(stop).apply(to: &copy)
+            XCTAssertFalse(copy[strength: lane].enabled)
+            XCTAssertTrue(copy[strength: lane == .daily ? .fresh : .daily].enabled)
+            XCTAssertTrue(copy.enabled)
+            let refreshed = SiteProbeCommand.menuItem(for: copy, target: self, action: selector)
+            let stopped = try XCTUnwrap(refreshed.submenu?.items.first { $0.accessibilityLabel() == stop.accessibilityLabel() })
+            XCTAssertEqual(stopped.state, .on)
+        }
+        XCTAssertEqual(checked.submenu?.items.first { $0.title == balanced.title }?.state, .on)
+    }
+
+    @MainActor
+    func testConfigurationWindowReloadProtectsUnsavedDraft() async throws {
+        let domain = "NetRateTests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let url = try configurationDirectory().appending(path: "config.json")
+        let store = ProbeConfigurationStore(url: url, defaults: defaults)
+        try store.loadOnLaunch()
+        let initial = try XCTUnwrap(store.configuration)
+        let monitor = ConnectivityMonitor(sites: initial.sites, automaticTimer: false) {}
+        let file = SiteSettingsWindow.ConfigurationFile(store: store, startupError: nil) {
+            if let configuration = store.configuration { monitor.apply(configuration) }
+        }
+        let controller = SiteSettingsWindow(sites: initial.sites, probingEnabled: true, configurationFile: file) { sites in
+            try store.save(.init(probingEnabled: true, sites: sites))
+        }
+        let window = try XCTUnwrap(controller.window)
+        window.setContentSize(window.contentMinSize)
+        window.orderFrontRegardless()
+        defer { window.orderOut(nil) }
+        let content = try XCTUnwrap(window.contentView)
+        content.layoutSubtreeIfNeeded()
+        let fileMenu = try XCTUnwrap(view(content) { (popup: NSPopUpButton) in popup.title == "配置文件" })
+        XCTAssertLessThanOrEqual(fileMenu.frame.width, content.bounds.width)
+        let menu = try XCTUnwrap(fileMenu.menu)
+        XCTAssertNotNil(menu.item(withTitle: "在 Finder 中显示"))
+        let reload = try XCTUnwrap(menu.item(withTitle: "重新读取配置"))
+        let table = try XCTUnwrap(view(content) { (_: NSTableView) in true })
+        let add = try XCTUnwrap(view(content) { (b: NSButton) in b.title == "新增站点" })
+        func alertButton(_ title: String) throws -> NSButton {
+            let root = try XCTUnwrap(window.attachedSheet?.contentView)
+            return try XCTUnwrap(view(root) { (button: NSButton) in button.title == title })
+        }
+        add.performClick(nil)
+        XCTAssertEqual(table.numberOfRows, 3)
+        var updated = initial
+        updated.probingEnabled = false
+        updated.sites[0].fresh.interval = 10
+        updated.sites.append(try ProbeSite.custom(name: "Cursor", address: "https://api2.cursor.sh/"))
+        let external = try JSONEncoder().encode(updated)
+        try external.write(to: url, options: .atomic)
+        XCTAssertEqual(monitor.state.rows.count, 2)
+
+        menu.performActionForItem(at: menu.index(of: reload))
+        try alertButton("继续编辑").performClick(nil)
+        try await waitUntil { window.attachedSheet == nil }
+        XCTAssertEqual(table.numberOfRows, 3)
+        XCTAssertEqual(store.configuration, initial)
+        XCTAssertEqual(try Data(contentsOf: url), external)
+
+        menu.performActionForItem(at: menu.index(of: reload))
+        try alertButton("丢弃并重新读取").performClick(nil)
+        try await waitUntil { window.attachedSheet == nil && store.configuration == updated }
+        XCTAssertEqual(table.numberOfRows, 3)
+        XCTAssertEqual(monitor.state.rows.map(\.name), ["Google", "Cloudflare", "Cursor"])
+        XCTAssertEqual(monitor.state.rows.first?.freshSettings.interval, 10)
+        XCTAssertFalse(monitor.state.enabled)
+        XCTAssertEqual(try Data(contentsOf: url), external)
+    }
+
+    @MainActor
+    func testInlineEditorsKeepInputsAndFollowMenuSelections() throws {
+        var sites = ProbeSite.builtIns
+        var personal = ProbeLane.fresh.strengths[1]
+        personal = ProbeStrength(id: "personal", name: "办公", values: personal.values)
+        sites[0][strength: .fresh] = LaneStrength(selectedID: personal.id, personal: [personal])
+        var saved: [ProbeSite]?
+        let controller = SiteSettingsWindow(sites: sites, probingEnabled: true) { saved = $0 }
         let window = try XCTUnwrap(controller.window)
         window.orderFrontRegardless()
         defer { window.orderOut(nil) }
-        let list = try XCTUnwrap(window.contentView)
-        let table = try XCTUnwrap(view(list) { (_: NSTableView) in true })
-        table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
-        func button(_ text: String, in root: NSView) throws -> NSButton {
-            try XCTUnwrap(view(root) { (b: NSButton) in b.title == text })
+        let root = try XCTUnwrap(window.contentView)
+        root.layoutSubtreeIfNeeded()
+        let table = try XCTUnwrap(view(root) { (_: NSTableView) in true })
+        func row(_ index: Int) throws -> NSView {
+            try XCTUnwrap(table.rowView(atRow: index, makeIfNecessary: true))
         }
-        func field(_ name: String, in root: NSView) throws -> NSTextField {
-            try XCTUnwrap(view(root) { (f: NSTextField) in f.accessibilityLabel() == name })
+        func click(_ title: String, in root: NSView) throws {
+            let button = try XCTUnwrap(view(root) { (b: NSButton) in b.title == title || b.accessibilityLabel() == title })
+            button.performClick(nil)
         }
-        for save in [false, true] {
-            try button("编辑站点", in: list).performClick(nil)
-            let sheet = try XCTUnwrap(window.attachedSheet)
-            let root = try XCTUnwrap(sheet.contentView)
-            XCTAssertNil(view(root) { (f: NSTextField) in f.stringValue.contains("全部站点合计") })
-            XCTAssertEqual(try field("HTTPS 地址", in: root).toolTip, HelpField.address.tip(readOnly: true))
-            let interval = try field("新建间隔（秒）", in: root)
-            XCTAssertEqual(interval.stringValue, "6")
-            XCTAssertFalse(try field("HTTPS 地址", in: root).isEditable)
-            XCTAssertEqual(try field("成功状态码", in: root).stringValue, "204")
-            let daily = try field("复用每小时预计流量", in: root).stringValue
-            interval.stringValue = "12"
-            NotificationCenter.default.post(name: NSControl.textDidChangeNotification, object: interval)
-            XCTAssertEqual(try field("新建每小时预计流量", in: root).stringValue, "2.1 MB")
-            XCTAssertEqual(try field("复用每小时预计流量", in: root).stringValue, daily)
-            let toggle = try XCTUnwrap(view(root) { (b: NSButton) in b.accessibilityLabel() == "启用新建" })
-            toggle.performClick(nil)
-            XCTAssertFalse(interval.isEnabled)
-            XCTAssertEqual(interval.toolTip, HelpField.interval.help.tip)
-            XCTAssertEqual(interval.accessibilityHelp(), interval.toolTip)
-            XCTAssertEqual(try field("新建每小时预计流量", in: root).stringValue, "0 KB")
-            toggle.performClick(nil)
-            XCTAssertEqual(interval.stringValue, "12")
-            let cutoff = try field("新建截止（秒）", in: root)
-            cutoff.stringValue = "1"
-            try button("确定", in: root).performClick(nil)
-            XCTAssertTrue(window.attachedSheet === sheet)
-            XCTAssertNotNil(view(root) { (f: NSTextField) in f.stringValue == SiteConfigurationError.shortDeadline.localizedDescription })
-            cutoff.stringValue = "10"
-            try button(save ? "确定" : "取消", in: root).performClick(nil)
-            try await waitUntil { window.attachedSheet == nil }
-            XCTAssertNil(committed)
-            var expected = site
-            if save { expected.fresh.interval = 12 }
-            let footer = monitor.estimate(for: [expected]).footer
-            XCTAssertTrue(footer.hasPrefix("全部站点合计"))
-            XCTAssertNotNil(view(list) { (f: NSTextField) in f.stringValue == footer })
+        XCTAssertEqual(table.numberOfColumns, 4)
+        XCTAssertEqual(table.numberOfRows, 2)
+        let address = try XCTUnwrap(view(try row(0)) { (f: NSTextField) in f.accessibilityLabel() == "HTTPS 地址" })
+        XCTAssertFalse(address.isEditable)
+        XCTAssertTrue(try XCTUnwrap(address.toolTip).contains(address.stringValue))
+        try click("展开或折叠Google", in: row(0))
+        try click("展开或折叠Cloudflare", in: row(2))
+        XCTAssertEqual(table.numberOfRows, 4)
+        let google = try XCTUnwrap(view(try row(1)) { (_: SiteEditor) in true })
+        try click("管理新建探测强度", in: google)
+        let field = try XCTUnwrap(view(google) { (f: NSTextField) in f.accessibilityLabel() == "新建发起间隔" })
+        func type(_ value: String, into field: NSTextField) {
+            field.stringValue = value
+            field.delegate?.controlTextDidChange?(.init(name: NSControl.textDidChangeNotification, object: field))
         }
-        try button("保存", in: list).performClick(nil)
-        XCTAssertEqual(committed?.first?.fresh.interval, 12)
-        XCTAssertEqual(committed?.first?.daily, site.daily)
+        type("12", into: field)
+        XCTAssertNotNil(view(google) { (f: NSTextField) in f.stringValue == "16.8 MB" })
+        XCTAssertNotNil(view(google) { (f: NSTextField) in f.stringValue == "个人 · 已选" })
+        sites[0][strength: .fresh].selectedID = "low"
+        controller.syncMenu(.init(probingEnabled: false, sites: sites))
+        XCTAssertEqual(field.stringValue, "12")
+        XCTAssertNotNil(view(root) { (f: NSTextField) in f.stringValue.contains("恢复探测后预计") })
+        func chooseTemplate(_ title: String) throws {
+            let popup = try XCTUnwrap(view(google) { (b: NSPopUpButton) in b.accessibilityLabel() == "新建新增强度" })
+            let menu = try XCTUnwrap(popup.menu)
+            menu.update()
+            XCTAssertEqual(menu.items[1].title, "低频（当前）")
+            XCTAssertEqual(menu.items.filter { $0.title.hasPrefix("低频") }.count, 1)
+            let index = menu.indexOfItem(withTitle: title)
+            XCTAssertGreaterThan(index, 0)
+            if index > 0 { menu.performActionForItem(at: index) }
+        }
+        try chooseTemplate("办公")
+        XCTAssertEqual(google.draft.form.personal[.fresh]?.last?.numbers.first, "12")
+        let nameEditor = try XCTUnwrap(window.firstResponder as? NSTextView)
+        XCTAssertEqual((nameEditor.string as NSString).substring(with: nameEditor.selectedRange()), "自定义 1")
+        try chooseTemplate("温和")
+        XCTAssertEqual(google.draft.form.personal[.fresh]?.last?.numbers.first, "15")
+        google.toggle()
+        google.toggle()
+        XCTAssertEqual(google.draft.form.personal[.fresh]?.first?.numbers.first, "12")
+        try click("新增站点", in: root)
+        XCTAssertEqual(table.numberOfRows, 5)
+        try click("保存", in: root)
+        XCTAssertNil(saved)
+        XCTAssertNil(window.attachedSheet)
+        let newAddress = try XCTUnwrap(view(try row(4)) { (f: NSTextField) in f.accessibilityLabel() == "HTTPS 地址" })
+        XCTAssertTrue(newAddress.currentEditor() === window.firstResponder)
+        type("https://example.com/ready", into: newAddress)
+        try click("保存", in: root)
+        let committed = try XCTUnwrap(saved)
+        XCTAssertEqual(committed[0].fresh.interval, 30)
+        XCTAssertEqual(committed[0][strength: .fresh].personal.first?.values.interval, 12)
+        XCTAssertEqual(committed[0][strength: .fresh].personal.count, 3)
+        XCTAssertEqual(committed[2].name, "example.com")
+        XCTAssertFalse(committed[2].enabled)
+        XCTAssertFalse(committed[2].daily.enabled)
+        XCTAssertTrue(committed[2].fresh.enabled)
+        XCTAssertEqual(committed[2][strength: .fresh].selectedID, "balanced")
+    }
+
+    @MainActor
+    func testStoppedLaneCanDeleteItsPreviouslySelectedStrength() throws {
+        var site = try ProbeSite.custom(name: "Example", address: "https://example.com/")
+        let original = ProbeStrength(id: "original", name: "原有配置", values: ProbeLane.daily.strengths[0].values)
+        site[strength: .daily] = LaneStrength(enabled: false, selectedID: original.id, personal: [original])
+        var config = ProbeConfiguration(probingEnabled: false, sites: [site] + ProbeSite.builtIns)
+        var saved: [ProbeSite]?
+        let controller = SiteSettingsWindow(sites: config.sites, probingEnabled: config.probingEnabled) { saved = $0 }
+        let window = try XCTUnwrap(controller.window)
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+        let root = try XCTUnwrap(window.contentView)
+        let table = try XCTUnwrap(view(root) { (_: NSTableView) in true })
+        root.layoutSubtreeIfNeeded()
+        func button(_ title: String, in area: NSView) throws -> NSButton {
+            try XCTUnwrap(view(area) { (button: NSButton) in button.title == title || button.accessibilityLabel() == title })
+        }
+        let siteRow = try XCTUnwrap(table.rowView(atRow: 0, makeIfNecessary: true))
+        try button("展开或折叠Example", in: siteRow).performClick(nil)
+        let detail = try XCTUnwrap(table.rowView(atRow: 1, makeIfNecessary: true))
+        let editor = try XCTUnwrap(view(detail) { (_: SiteEditor) in true })
+        try button("管理复用探测强度", in: editor).performClick(nil)
+        XCTAssertTrue(try button("删除", in: editor).isEnabled)
+        try button("删除", in: editor).performClick(nil)
+
+        controller.syncMenu(config)
+        XCTAssertTrue(editor.draft.form.personal[.daily]?.isEmpty == true)
+        config.sites[0][strength: .daily].enabled = true
+        controller.syncMenu(config)
+        XCTAssertEqual(editor.draft.form.personal[.daily]?.first?.id, original.id)
+        try button("管理复用探测强度", in: editor).performClick(nil)
+        XCTAssertFalse(try button("删除", in: editor).isEnabled)
+
+        config.sites[0][strength: .daily].enabled = false
+        controller.syncMenu(config)
+        try button("删除", in: editor).performClick(nil)
+        try button("保存", in: root).performClick(nil)
+        config.sites = try XCTUnwrap(saved)
+        let reopened = try ProbeConfiguration.decode(JSONEncoder().encode(config))
+        let reuse = reopened.sites[0][strength: .daily]
+        XCTAssertFalse(reuse.enabled)
+        XCTAssertTrue(reuse.personal.isEmpty)
+        XCTAssertEqual(reuse.selectedID, "balanced")
+        XCTAssertEqual(reopened.sites[0][strength: .fresh], site[strength: .fresh])
+    }
+
+    @MainActor
+    func testCompactGridAlignsValuesAndRevealsInvalidFieldAfterReordering() throws {
+        var site = try ProbeSite.custom(name: "Work", address: "https://example.com/long/path")
+        site[strength: .daily].enabled = false
+        site[strength: .daily].personal = [ProbeStrength(id: "night", name: "夜间", values: ProbeLane.daily.strengths[1].values)]
+        var saved: [ProbeSite]?
+        let controller = SiteSettingsWindow(sites: [ProbeSite.builtIns[0], site], probingEnabled: true) { saved = $0 }
+        let window = try XCTUnwrap(controller.window)
+        window.setContentSize(window.contentMinSize)
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+        let root = try XCTUnwrap(window.contentView)
+        root.layoutSubtreeIfNeeded()
+        let table = try XCTUnwrap(view(root) { (_: NSTableView) in true })
+        func row(_ index: Int) throws -> NSView { try XCTUnwrap(table.rowView(atRow: index, makeIfNecessary: true)) }
+        func button(_ title: String, in area: NSView) throws -> NSButton {
+            try XCTUnwrap(view(area) { (button: NSButton) in button.title == title || button.accessibilityLabel() == title })
+        }
+        func label(_ title: String, in area: NSView) throws -> NSTextField {
+            try XCTUnwrap(view(area) { (field: NSTextField) in field.accessibilityLabel() == title })
+        }
+        func type(_ value: String, into field: NSTextField) {
+            field.stringValue = value
+            field.delegate?.controlTextDidChange?(.init(name: NSControl.textDidChangeNotification, object: field))
+        }
+        try button("展开或折叠Work", in: row(1)).performClick(nil)
+        try button("管理复用探测强度", in: row(2)).performClick(nil)
+        let detail = try row(2)
+        root.layoutSubtreeIfNeeded()
+        XCTAssertNil(view(detail) { (field: NSTextField) in field.stringValue == "方式" })
+        for title in ["复用", "新建"] {
+            XCTAssertNotNil(view(detail) { (field: NSTextField) in field.stringValue == title })
+        }
+        XCTAssertEqual(try label("复用当前探测强度", in: detail).stringValue, "已停止 · 快速")
+        XCTAssertEqual(try label("复用预计 8 小时请求数", in: detail).stringValue, "0")
+        XCTAssertEqual(try label("复用预计 8 小时流量", in: detail).stringValue, "0 KB")
+        let current = try label("复用当前截止时间", in: detail)
+        let edit = try label("复用截止时间", in: detail)
+        func textEdge(_ field: NSTextField) throws -> CGFloat {
+            field.convert(try XCTUnwrap(field.cell).titleRect(forBounds: field.bounds), to: root).maxX
+        }
+        XCTAssertEqual(try textEdge(current), try textEdge(edit), accuracy: 1)
+        let add = try button("复用新增强度", in: detail)
+        XCTAssertGreaterThanOrEqual(add.bounds.width, add.intrinsicContentSize.width)
+        XCTAssertLessThanOrEqual(add.convert(add.bounds, to: table).maxX, table.bounds.maxX)
+        try button("上移", in: root).performClick(nil)
+        XCTAssertEqual(table.selectedRow, 0)
+        XCTAssertEqual(table.numberOfRows, 3)
+        type("2", into: try label("复用截止时间", in: row(1)))
+        try button("展开或折叠Work", in: row(0)).performClick(nil)
+        XCTAssertEqual(table.numberOfRows, 2)
+        try button("保存", in: root).performClick(nil)
+        XCTAssertNil(saved)
+        XCTAssertEqual(table.numberOfRows, 3)
+        let invalid = try label("复用截止时间", in: row(1))
+        XCTAssertEqual(invalid.stringValue, "2")
+        XCTAssertTrue(invalid.currentEditor() === window.firstResponder)
+        type("8", into: invalid)
+        let name = try label("复用个人强度名称", in: row(1))
+        type("均衡", into: name)
+        try button("保存", in: root).performClick(nil)
+        XCTAssertNil(saved)
+        let duplicate = try label("复用个人强度名称", in: row(1))
+        XCTAssertTrue(duplicate.currentEditor() === window.firstResponder)
+        type("晚间", into: duplicate)
+        try button("保存", in: root).performClick(nil)
+        XCTAssertEqual(saved?.first?[strength: .daily].personal.first?.name, "晚间")
+        XCTAssertEqual(saved?.first?.id, site.id)
     }
 
     @MainActor
     func testModelessHelpSharesTopicsWithFieldTipsAndReturnsToDraft() async throws {
-        let monitor = ConnectivityMonitor(sites: [], automaticTimer: false) {}
-        let controller = SiteSettingsWindow(sites: [], estimate: monitor.estimate(for:)) { _ in }
+        let controller = SiteSettingsWindow(sites: [], probingEnabled: true) { _ in }
         let window = try XCTUnwrap(controller.window)
         window.makeKeyAndOrderFront(nil)
         defer { controller.close() }
@@ -1030,8 +1438,8 @@ final class NetRateTests: XCTestCase {
         try selectTopic(HelpField.codes.rawValue)
         XCTAssertEqual(scroller.contentView.bounds.minY, 0, accuracy: 1)
         try button("新增站点", in: list).performClick(nil)
-        let sheet = try XCTUnwrap(window.attachedSheet)
-        let root = try XCTUnwrap(sheet.contentView)
+        XCTAssertNil(window.attachedSheet)
+        let root = list
         let address = try XCTUnwrap(view(root) { (f: NSTextField) in f.accessibilityLabel() == "HTTPS 地址" })
         let input = "https://example.com/status"
         address.stringValue = input
@@ -1040,8 +1448,8 @@ final class NetRateTests: XCTestCase {
         try button("配置说明", in: root).performClick(nil)
         XCTAssertEqual(visibleHelp(), [help])
         XCTAssertTrue((help as? NSPanel)?.worksWhenModal == true)
-        sheet.makeKeyAndOrderFront(nil)
-        XCTAssertTrue(sheet.makeFirstResponder(address))
+        window.makeKeyAndOrderFront(nil)
+        XCTAssertTrue(window.makeFirstResponder(address))
         let fieldEditor = try XCTUnwrap(address.currentEditor())
         fieldEditor.insertText("/ready")
         let draft = address.stringValue
@@ -1053,16 +1461,14 @@ final class NetRateTests: XCTestCase {
             charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
         XCTAssertTrue(help.performKeyEquivalent(with: escape))
         XCTAssertTrue(visibleHelp().isEmpty)
-        XCTAssertTrue(window.attachedSheet === sheet)
+        XCTAssertNil(window.attachedSheet)
         XCTAssertEqual(address.stringValue, draft)
-        if NSApp.isActive { try await waitUntil { sheet.isKeyWindow } }
+        if NSApp.isActive { try await waitUntil { window.isKeyWindow } }
         // A background XCTest host can exercise the field editor without becoming the system key window.
-        XCTAssertTrue(sheet.firstResponder === fieldEditor)
+        XCTAssertTrue(window.firstResponder === fieldEditor)
         fieldEditor.insertText("2")
         XCTAssertTrue(address.stringValue.hasSuffix("2"))
         try button("取消", in: root).performClick(nil)
-        try await waitUntil { window.attachedSheet == nil }
-        XCTAssertEqual(try XCTUnwrap(view(list) { (_: NSTableView) in true }).numberOfRows, 0)
     }
 
     @MainActor
@@ -1109,45 +1515,48 @@ final class NetRateTests: XCTestCase {
         let name = "NetRateTests." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
-        let settings = SiteSettings(defaults: defaults)
+        let settings = LegacySiteSettings(defaults: defaults)
+        func writeLegacy(_ sites: [ProbeSite]) throws {
+            defaults.set(try legacySiteData(sites), forKey: "NetRate.ProbeSites.v1")
+        }
         XCTAssertEqual(settings.load(), ProbeSite.builtIns)
         var sites = ProbeSite.builtIns
         sites[0].enabled = false
         let custom = try ProbeSite.custom(name: " ", address: " https://example.com/status ")
         XCTAssertEqual(custom.name, "example.com")
-        try settings.save(sites + [custom])
-        XCTAssertEqual(SiteSettings(defaults: defaults).load(), sites + [custom])
+        try writeLegacy(sites + [custom])
+        XCTAssertEqual(settings.load(), sites + [custom])
         XCTAssertEqual(settings.load().last?.statusCodes.text, "")
         sites[1].fresh = .init(enabled: false, interval: 9, warning: 3, cutoff: 15, capacity: 4)
         var exact = custom
         exact.method = .get
         exact.daily.capacity = 8
         exact.statusCodes = try StatusCodes("2XX, 405")
-        try settings.save(sites + [exact])
+        try writeLegacy(sites + [exact])
         XCTAssertEqual(settings.load(), sites + [exact])
         XCTAssertTrue(settings.probingEnabled)
-        settings.probingEnabled = false
-        XCTAssertFalse(SiteSettings(defaults: defaults).probingEnabled)
+        defaults.set(false, forKey: "NetRate.ProbingEnabled")
+        XCTAssertFalse(settings.probingEnabled)
         let legacy = Data(#"[{"id":"old","name":"Codex","url":"https://example.com/","enabled":true,"expectedStatusCode":405}]"#.utf8)
         defaults.set(legacy, forKey: "NetRate.ProbeSites.v1")
-        XCTAssertEqual(Array(settings.load().dropLast()), ProbeSite.builtIns)
+        XCTAssertEqual(Array(settings.load().dropLast()).map(\.daily), Array(repeating: ProbeLane.daily.legacyDefaults, count: 2))
         XCTAssertEqual(settings.load().last?.statusCodes.text, "405")
         XCTAssertFalse(settings.load().last!.accepts(statusCode: 200))
         XCTAssertEqual(settings.load().last?.method, .head)
         XCTAssertEqual(settings.load().last?.fresh, ProbeLane.fresh.defaults)
         XCTAssertEqual(settings.load().first?.method, .get)
-        XCTAssertTrue(ProbeLane.daily.defaults.capacityHint?.contains("3 个名额") == true)
+        XCTAssertTrue(ProbeLane.daily.legacyDefaults.capacityHint?.contains("3 个名额") == true)
         XCTAssertNil(ProbeLane.fresh.defaults.capacityHint)
         exact.daily.warning = 9
-        XCTAssertThrowsError(try settings.save([exact]))
+        XCTAssertThrowsError(try exact.validate())
         exact.daily.warning = 0
-        XCTAssertThrowsError(try settings.save([exact]))
+        XCTAssertThrowsError(try exact.validate())
         exact.daily = ProbeLane.daily.defaults
         exact.daily.enabled = false
         exact.fresh.enabled = false
-        XCTAssertThrowsError(try settings.save([exact]))
+        XCTAssertThrowsError(try exact.validate())
         exact.enabled = false
-        try settings.save([exact])
+        try writeLegacy([exact])
         XCTAssertEqual(settings.load().last, exact)
         let mixed = try StatusCodes(" 2XX， 204, 405, 405 ")
         XCTAssertEqual(mixed.text, "2xx, 405")
@@ -1159,6 +1568,202 @@ final class NetRateTests: XCTestCase {
         for invalid in ["http://example.com", "https://", "https://user:secret@example.com", "https://example.com/#section"] {
             XCTAssertThrowsError(try ProbeSite.custom(name: "", address: invalid))
         }
+    }
+
+    @MainActor
+    func testConfigurationFileMigratesOnceAndDoesNotOverwriteInvalidFiles() throws {
+        let domain = "NetRateTests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        var github = try ProbeSite.custom(name: "GitHub", address: "https://github.com/", statusCodes: StatusCodes("200"))
+        github.daily.enabled = false
+        github.fresh = .init(interval: 10, warning: 5, cutoff: 8, capacity: 1)
+        var google = ProbeSite.builtIns[0]
+        google.enabled = false
+        let sites = [github, ProbeSite.builtIns[1], google]
+        let legacy = try legacySiteData(sites)
+        defaults.set(legacy, forKey: "NetRate.ProbeSites.v1")
+        defaults.set(false, forKey: "NetRate.ProbingEnabled")
+        let url = try configurationDirectory().appending(path: "NetRate/config.json")
+        let store = ProbeConfigurationStore(url: url, defaults: defaults)
+        try store.loadOnLaunch()
+        let expected = ProbeConfiguration(probingEnabled: false, sites: sites)
+        XCTAssertEqual(store.configuration, expected)
+        let migrated = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertTrue(migrated.contains("\"schemaVersion\" : 2"))
+        XCTAssertTrue(migrated.contains("https://github.com/"))
+
+        let reopened = ProbeConfigurationStore(url: url, defaults: defaults)
+        try reopened.loadOnLaunch()
+        XCTAssertEqual(reopened.configuration, expected)
+        XCTAssertEqual(defaults.data(forKey: "NetRate.ProbeSites.v1"), legacy)
+        XCTAssertFalse(defaults.bool(forKey: "NetRate.ProbingEnabled"))
+
+        let invalid = Data(#"{"schemaVersion":99}"#.utf8)
+        try invalid.write(to: url, options: .atomic)
+        let startup = ProbeConfigurationStore(url: url, defaults: defaults)
+        XCTAssertThrowsError(try startup.loadOnLaunch()) { XCTAssertEqual($0.localizedDescription, "当前版本不支持配置文件格式 99。") }
+        XCTAssertNil(startup.configuration)
+        XCTAssertEqual(try Data(contentsOf: url), invalid)
+        try FileManager.default.removeItem(at: url)
+        XCTAssertThrowsError(try startup.loadOnLaunch())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    @MainActor
+    func testVersionOneIsReadWithoutOverwritingUntilNextSave() throws {
+        var github = try ProbeSite.custom(name: "GitHub", address: "https://github.com/")
+        github.daily = .init(enabled: false, interval: 2, warning: 5, cutoff: 5, capacity: 1)
+        github.fresh = .init(interval: 10, warning: 5, cutoff: 8, capacity: 1)
+        var cursor = try ProbeSite.custom(name: "Cursor", address: "https://example.com/")
+        cursor.fresh = .init(interval: 10, warning: 5, cutoff: 10, capacity: 1)
+        let sites = [github, ProbeSite.builtIns[1], cursor, ProbeSite.legacyGoogle]
+        let v1 = try JSONSerialization.data(withJSONObject: [
+            "schemaVersion": 1, "probingEnabled": false,
+            "sites": JSONSerialization.jsonObject(with: legacySiteData(sites))
+        ])
+        let url = try configurationDirectory().appending(path: "config.json")
+        let domain = UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        try v1.write(to: url)
+        let store = ProbeConfigurationStore(url: url, defaults: defaults)
+        try store.loadOnLaunch()
+        var config = try XCTUnwrap(store.configuration)
+        XCTAssertEqual(config.sites, sites)
+        XCTAssertEqual(try Data(contentsOf: url), v1)
+        XCTAssertEqual(config.sites[0][strength: .daily].selectedID, "original")
+        XCTAssertFalse(config.sites[0].daily.enabled)
+        XCTAssertEqual(config.sites[0][strength: .fresh].personal.first?.name, "原有配置")
+        XCTAssertEqual(config.sites[2][strength: .fresh].selectedID, "balanced")
+        config.sites[0][strength: .fresh].selectedID = "balanced"
+        try store.save(config)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        XCTAssertEqual(json["schemaVersion"] as? Int, 2)
+        XCTAssertEqual(try store.read().configuration, config)
+        XCTAssertEqual(config.sites[0][strength: .fresh].personal.first?.values.cutoff, 8)
+
+        var invalid = config
+        invalid.sites[1][strength: .fresh].selectedID = "original"
+        XCTAssertThrowsError(try store.save(invalid))
+        invalid = config
+        invalid.sites[0][strength: .fresh].personal.append(ProbeLane.fresh.strengths[1])
+        XCTAssertThrowsError(try store.save(invalid))
+        XCTAssertEqual(try store.read().configuration, config)
+    }
+
+    func testAllEightHourBudgetsAndConcurrency() throws {
+        let expectations: [(ProbeLane, [Int], [Int], [Int])] = [
+            (.daily, [2, 5, 10, 20], [14_400, 5760, 2880, 1440], [1, 1, 1, 1]),
+            (.fresh, [6, 10, 15, 30], [4800, 2880, 1920, 960], [2, 1, 1, 1])
+        ]
+        var total = ProbeBudget()
+        for (lane, intervals, counts, capacities) in expectations {
+            XCTAssertEqual(lane.strengths.map(\.id), ["fast", "balanced", "gentle", "low"])
+            for (index, strength) in lane.strengths.enumerated() {
+                XCTAssertEqual(strength.values.interval, intervals[index])
+                XCTAssertEqual(strength.values.warning, 5)
+                XCTAssertEqual(strength.values.cutoff, lane == .daily ? 8 : 10)
+                XCTAssertEqual(strength.values.capacity, capacities[index])
+                let budget = ProbeBudget(lane: lane, interval: intervals[index])
+                XCTAssertEqual(budget.requests, counts[index])
+                XCTAssertEqual(budget.bytes, Double(counts[index] * (lane == .daily ? 270 : 7014)))
+                total.add(budget)
+            }
+        }
+        XCTAssertEqual(total.requests, 35040) // Sum budgets before display rounding.
+    }
+
+    @MainActor
+    func testOnlyEffectiveStrengthChangesResetProbeHistory() async throws {
+        var site = ProbeSite.builtIns[0]
+        let h = ProbeHarness(sites: [site])
+        defer { h.stop() }
+        try await waitUntil { h.daily.count == 1 && h.fresh.count == 1 }
+        h.advance(5)
+        XCTAssertEqual(h.monitor.state.rows[0].daily, .waiting)
+        h.delay.time = 7
+        h.daily[0].reply(204)
+        h.fresh[0].reply(204)
+        try await waitUntil { h.monitor.state.rows[0].dailyCount.successes == 1 && h.monitor.state.rows[0].freshCount.successes == 1 }
+        let personal = ProbeStrength(id: "mine", name: "工作", values: ProbeLane.fresh.strengths[0].values)
+        site[strength: .fresh].personal = [personal]
+        site[strength: .fresh].selectedID = personal.id
+        h.monitor.apply([site])
+        XCTAssertEqual(h.monitor.state.rows[0].freshCount.successes, 1)
+        site[strength: .fresh].personal[0].name = "办公"
+        h.monitor.apply([site])
+        XCTAssertEqual(h.monitor.state.rows[0].freshCount.successes, 1)
+        site[strength: .fresh].personal[0].values.interval = 13
+        h.monitor.apply([site])
+        XCTAssertEqual(h.monitor.state.rows[0].freshCount.completed, 0)
+        XCTAssertEqual(h.monitor.state.rows[0].dailyCount.successes, 1)
+    }
+
+    @MainActor
+    func testConfigurationFileChecksExternalChangesAndPreservesActiveSettings() throws {
+        let domain = "NetRateTests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let directory = try configurationDirectory()
+        let url = directory.appending(path: "config.json")
+        let store = ProbeConfigurationStore(url: url, defaults: defaults)
+        try store.loadOnLaunch()
+        let initial = try XCTUnwrap(store.configuration)
+        XCTAssertEqual(initial, .init(probingEnabled: true, sites: ProbeSite.builtIns))
+        var updated = initial
+        updated.probingEnabled = false
+        updated.sites[0].fresh.interval = 10
+        let edited = try JSONEncoder().encode(updated)
+        try edited.write(to: url, options: .atomic)
+        XCTAssertThrowsError(try store.save(initial))
+        XCTAssertEqual(store.configuration, initial)
+        XCTAssertEqual(try Data(contentsOf: url), edited)
+        let candidate = try store.read()
+        XCTAssertEqual(candidate.configuration, updated)
+        XCTAssertEqual(store.configuration, initial)
+        let stale = Data("not json".utf8)
+        try stale.write(to: url, options: .atomic)
+        XCTAssertThrowsError(try store.accept(candidate))
+        XCTAssertThrowsError(try store.read())
+        XCTAssertEqual(store.configuration, initial)
+        XCTAssertEqual(try Data(contentsOf: url), stale)
+        try edited.write(to: url, options: .atomic)
+        try store.accept(store.read())
+        XCTAssertEqual(store.configuration, updated)
+        XCTAssertEqual(try Data(contentsOf: url), edited)
+
+        var invalid = updated
+        invalid.sites[0].fresh.interval = 0
+        XCTAssertThrowsError(try store.save(invalid)) { XCTAssertTrue($0.localizedDescription.contains("sites[0]")) }
+        invalid.sites = [updated.sites[0], updated.sites[0]]
+        XCTAssertThrowsError(try ProbeConfiguration.decode(JSONEncoder().encode(invalid)))
+        invalid.sites = Array(updated.sites.dropFirst())
+        XCTAssertThrowsError(try ProbeConfiguration.decode(JSONEncoder().encode(invalid)))
+        invalid.sites = updated.sites
+        invalid.sites[0].url = URL(string: "https://example.com/")!
+        XCTAssertThrowsError(try ProbeConfiguration.decode(JSONEncoder().encode(invalid)))
+
+        if geteuid() != 0 {
+            try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path)
+            defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path) }
+            XCTAssertThrowsError(try store.save(initial))
+            XCTAssertEqual(store.configuration, updated)
+            XCTAssertEqual(try Data(contentsOf: url), edited)
+        }
+    }
+
+    @MainActor
+    func testApplyingPausedConfigurationDoesNotLaunchItsNewSites() async throws {
+        let h = ProbeHarness()
+        defer { h.stop() }
+        try await waitUntil { h.daily.count == 1 && h.fresh.count == 1 }
+        h.monitor.apply(ProbeConfiguration(probingEnabled: false, sites: ProbeSite.builtIns))
+        h.advance(40)
+        try await waitUntil { h.daily[0].stopped && h.fresh[0].stopped }
+        XCTAssertEqual(h.sessions, [.daily, .fresh])
+        XCTAssertFalse(h.monitor.state.enabled)
+        XCTAssertTrue(h.monitor.state.rows.contains { $0.name == "Cloudflare" })
     }
 
     func testNativeReaderAndMalformedInput() throws {

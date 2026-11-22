@@ -16,9 +16,15 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var face = StatusFace()
     private var item: NSStatusItem!
     private var hover: StatusHover!
-    private let siteSettings = SiteSettings()
+    private let configurationStore = ProbeConfigurationStore()
+    private var configurationError: Error?
+    private var configuration: ProbeConfiguration {
+        configurationStore.configuration ?? ProbeConfiguration(probingEnabled: false, sites: ProbeSite.builtIns)
+    }
     private var siteWindow: SiteSettingsWindow?
     private var probeItem: NSMenuItem!
+    private let siteMenuStart = NSMenuItem.separator()
+    private let systemSleep = SystemSleepMenu()
     private var loginItem: NSMenuItem!
     private let service = SMAppService.mainApp
     private let queue = DispatchQueue(label: "netrate.sample", qos: .utility)
@@ -26,7 +32,7 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var generation = 0
     private var latestSpeed: Speed?
     private var networkStore: SCDynamicStore?
-    private lazy var connectivity = ConnectivityMonitor(sites: siteSettings.load(), enabled: siteSettings.probingEnabled) { [weak self] in
+    private lazy var connectivity = ConnectivityMonitor(sites: configuration.sites, enabled: configuration.probingEnabled) { [weak self] in
         guard let self else { return }
         self.display(self.latestSpeed)
     }
@@ -40,6 +46,11 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        do {
+            try configurationStore.loadOnLaunch()
+        } catch {
+            configurationError = error
+        }
         // The menu bar on this Mac adds its own horizontal padding to the button.
         item = NSStatusBar.system.statusItem(withLength: face.width)
         item.autosaveName = "NetRate"
@@ -48,18 +59,21 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let menu = NSMenu()
         menu.autoenablesItems = false
         menu.delegate = self
-        let sites = menu.addItem(withTitle: "探测站点配置", action: #selector(configureSites), keyEquivalent: "")
-        sites.target = self
-        menu.addItem(.separator())
         probeItem = menu.addItem(withTitle: "启用站点探测", action: #selector(toggleProbing), keyEquivalent: "")
         probeItem.target = self
         probeItem.toolTip = HelpField.global.tip()
         probeItem.setAccessibilityHelp(HelpField.global.tip())
-        probeItem.state = siteSettings.probingEnabled ? .on : .off
+        let sites = menu.addItem(withTitle: "探测站点配置", action: #selector(configureSites), keyEquivalent: "")
+        sites.target = self
+        menu.addItem(siteMenuStart)
+        menu.addItem(.separator())
+        menu.addItem(systemSleep.item)
+        menu.addItem(.separator())
         loginItem = menu.addItem(withTitle: "登录时启动", action: #selector(toggleLogin), keyEquivalent: "")
         loginItem.target = self
         let quit = menu.addItem(withTitle: "退出", action: #selector(quitApp), keyEquivalent: "q")
         quit.target = self
+        refreshSiteMenu(menu)
         item.button?.menu = menu
         item.menu = menu
         let center = NSWorkspace.shared.notificationCenter
@@ -123,47 +137,107 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func display(_ speed: Speed?) {
         latestSpeed = speed
-        let state = connectivity.state
+        var state = connectivity.state
+        if configurationError != nil { state.configurationUnavailable = true }
         if let button = item.button {
             face.update(button, speed: speed, connectivity: state)
         }
         hover.update(state)
-        siteWindow?.refreshEstimate()
     }
 
     func applicationDidChangeScreenParameters(_ notification: Notification) { hover?.resetPosition() }
 
     @objc private func resetHoverPosition() { hover.resetPosition() }
 
+    private func refreshSiteMenu(_ menu: NSMenu) {
+        for entry in menu.items where entry.representedObject is String && entry.hasSubmenu {
+            menu.removeItem(entry)
+        }
+        let loaded = configuration
+        probeItem.state = loaded.probingEnabled ? .on : .off
+        probeItem.isEnabled = configurationError == nil
+        let start = menu.index(of: siteMenuStart) + 1
+        for (offset, site) in loaded.sites.enumerated() {
+            let entry = SiteProbeCommand.menuItem(for: site, target: self, action: #selector(changeSite(_:)))
+            entry.isEnabled = configurationError == nil
+            menu.insertItem(entry, at: start + offset)
+        }
+    }
+
     func menuWillOpen(_ menu: NSMenu) {
         hover.setMenuOpen(true)
+        systemSleep.refresh()
         refreshLogin()
     }
 
     func menuDidClose(_ menu: NSMenu) { hover.setMenuOpen(false) }
 
-    @objc private func configureSites() {
+    @objc private func configureSites() { _ = presentSiteSettings() }
+
+    private func presentSiteSettings() -> SiteSettingsWindow {
         if let siteWindow {
             siteWindow.present()
-            return
+            return siteWindow
         }
-        let window = SiteSettingsWindow(sites: siteSettings.load(), estimate: connectivity.estimate(for:)) { [weak self] sites in
+        let files = SiteSettingsWindow.ConfigurationFile(store: configurationStore, startupError: configurationError) { [weak self] in
+            self?.applyConfiguration()
+        }
+        let window = SiteSettingsWindow(sites: configuration.sites, probingEnabled: configuration.probingEnabled,
+                                        configurationFile: files, didClose: { [weak self] in
+            self?.siteWindow = nil
+        }) { [weak self] sites in
             guard let self else { return }
-            if let sites {
-                try self.siteSettings.save(sites)
-                self.connectivity.apply(sites)
-            }
-            self.siteWindow = nil
+            var updated = self.configuration
+            updated.sites = sites
+            try self.saveConfiguration(updated)
         }
         siteWindow = window
         window.present()
+        return window
+    }
+
+    @objc private func changeSite(_ sender: NSMenuItem) {
+        var updated = configuration
+        guard configurationError == nil, let command = sender.representedObject as? SiteProbeCommand,
+              let index = updated.sites.firstIndex(where: { $0.id == command.siteID }) else { return }
+        let previous = updated.sites[index]
+        do {
+            try command.apply(to: &updated.sites[index])
+            guard updated.sites[index] != previous else { return }
+            try saveConfiguration(updated)
+        } catch {
+            showConfigurationError(error)
+        }
     }
 
     @objc private func toggleProbing() {
-        let value = !siteSettings.probingEnabled
-        siteSettings.probingEnabled = value
-        probeItem.state = value ? .on : .off
-        connectivity.setEnabled(value)
+        guard configurationError == nil else { return }
+        var updated = configuration
+        updated.probingEnabled.toggle()
+        do {
+            try saveConfiguration(updated)
+        } catch {
+            showConfigurationError(error)
+        }
+    }
+
+    private func saveConfiguration(_ updated: ProbeConfiguration) throws {
+        try configurationStore.save(updated)
+        applyConfiguration()
+    }
+
+    private func applyConfiguration() {
+        configurationError = nil
+        if let menu = probeItem.menu { refreshSiteMenu(menu) }
+        connectivity.apply(configuration)
+        siteWindow?.syncMenu(configuration)
+    }
+
+    private func showConfigurationError(_ error: Error) {
+        NSApp.activate()
+        let alert = NSAlert(error: error)
+        alert.informativeText = configurationStore.url.path(percentEncoded: false)
+        alert.runModal()
     }
 
     private func refreshLogin() {

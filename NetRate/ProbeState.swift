@@ -108,6 +108,31 @@ struct ProbeUsage {
     }
 }
 
+struct ProbeBudget: Equatable {
+    var requests = 0
+    var bytes = 0.0
+
+    init() {}
+
+    init(lane: ProbeLane, interval: Int) {
+        requests = 1 + (28_800 - 1) / interval
+        bytes = Double(requests) * Double(lane == .daily ? ProbeUsage.reusedBytes : ProbeUsage.freshBytes)
+    }
+
+    mutating func add(_ other: Self) {
+        requests += other.requests
+        bytes += other.bytes
+    }
+
+    var trafficDisplay: String {
+        let unit = bytes >= 1_000_000 ? (1_000_000.0, "MB") : (1_000.0, "KB")
+        let amount = (bytes / unit.0).formatted(.number.precision(.significantDigits(1...3)))
+        return "\(amount) \(unit.1)"
+    }
+
+    var display: String { "\(requests.formatted()) 次 · \(trafficDisplay)" }
+}
+
 struct SiteTraffic: Equatable {
     var daily = 0.0
     var fresh = 0.0
@@ -182,6 +207,7 @@ struct ConnectivityState: Equatable {
     var rows: [Row] = []
     var enabled = true
     var rate = "0 B/h"
+    var configurationUnavailable = false
 
     var color: ArrowColor {
         guard enabled else { return .normal }
@@ -192,6 +218,7 @@ struct ConnectivityState: Equatable {
     }
 
     var title: String {
+        if configurationUnavailable { return "配置文件异常，探测已暂停" }
         if !enabled { return "站点探测已关闭" }
         if !rows.contains(where: \.enabled) { return "未启用探测" }
         switch color {

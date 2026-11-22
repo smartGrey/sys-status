@@ -116,7 +116,7 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
         let rows = sites.map { site in
             ConnectivityState.Row(id: site.settings.id, name: site.settings.name, enabled: site.settings.enabled,
                                   daily: site.daily.result, fresh: site.fresh.result,
-                                  dailySettings: site.settings.daily, freshSettings: site.settings.fresh,
+                                  dailySettings: site.settings[.daily], freshSettings: site.settings[.fresh],
                                   dailyCount: site.daily.history.count(at: time), freshCount: site.fresh.history.count(at: time))
         }
         let bytes = enabled ? sites.reduce(0.0) { sum, site in
@@ -195,6 +195,13 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
             networkDelay = nil
             pump()
         }
+    }
+
+    func apply(_ configuration: ProbeConfiguration) {
+        // Stop the old schedule before replacing its sites when the new configuration is paused.
+        if !configuration.probingEnabled { setEnabled(false) }
+        apply(configuration.sites)
+        if configuration.probingEnabled { setEnabled(true) }
     }
 
     func apply(_ settings: [ProbeSite]) {

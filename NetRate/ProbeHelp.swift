@@ -15,18 +15,17 @@ struct FieldHelp {
 enum HelpField: String, CaseIterable {
     case global = "探测总开关", siteEnabled = "站点启用", name = "名称", address = "HTTPS 地址"
     case method = "请求方法", codes = "成功状态码", laneEnabled = "类型启用", type = "探测类型"
+    case intensity = "探测强度"
     case interval = "发起间隔", warning = "告警时间", cutoff = "截止时间", capacity = "并发", traffic = "预计流量"
 
     var help: FieldHelp {
-        let reuse = ProbeLane.daily.defaults
-        let fresh = ProbeLane.fresh.defaults
         switch self {
         case .global:
             return FieldHelp("暂停或恢复所有站点的探测，网速读数继续更新。",
-                             "在菜单栏勾选「启用站点探测」即可恢复。关闭期间，总窗口可查看开启后的预计流量。", .history)
+                             "恢复时继续探测之前勾选的站点。关闭期间仍可编辑站点并查看开启后的预计流量。", .history)
         case .siteEnabled:
             return FieldHelp("勾选后探测这个站点。暂停会保留本站的参数。",
-                             "每个启用的站点至少要开启一种探测类型。在总窗口点「保存」后生效。", .history)
+                             "每个启用的站点至少要开启一种探测类型。在菜单中勾选后立即保存。", .history)
         case .name:
             return FieldHelp("给站点起一个容易辨认的名字。留空会使用主机名。",
                              "例如给工作服务取名「办公入口」，悬停时就能找到它。仅改名称会保留近期结果。", .history)
@@ -45,21 +44,20 @@ enum HelpField: String, CaseIterable {
         case .type:
             return FieldHelp("复用会优先使用已有连接。新建每次都建立独立连接。",
                              "复用探测遇到慢告警、状态码不符、连接错误或超时，后续请求会换连接。已经发出的请求仍按各自的截止时间等待。", .cost)
+        case .intensity:
+            return FieldHelp("在站点子菜单选择探测强度，选择后立即生效。", "个人强度只属于本站的这一种方式。从模板创建后保存，再到菜单选用。编辑使用中的个人强度，保存后更新运行参数。", .history)
         case .interval:
-            return FieldHelp("从这一次实际发出请求起，隔多少秒再尝试发下一条。",
-                             "填写正整数。默认复用每 \(reuse.interval) 秒一次，新建每 \(fresh.interval) 秒一次。即使上一条还在等待，有空位也会按时发出。", .schedule)
+            return FieldHelp("从这一次实际发出请求起，隔多少秒再尝试发下一条。", "有空位时按间隔发起，满额时等待释放。间隔越短，8 小时发出的请求越多。", .schedule)
         case .warning:
-            return FieldHelp("等了这么久还没收到响应，就先更新状态颜色。请求可以继续等到截止时间。",
-                             "填写从请求发出起算的正整数秒数。默认复用为 \(reuse.warning) 秒，新建为 \(fresh.warning) 秒。告警与截止相同时直接显示最终结果。", .colors)
+            return FieldHelp("达到提醒时间后更新颜色，请求继续等到截止。", "内置强度均在 5 秒提醒。复用连接变慢时后续请求会换连接。", .colors)
         case .cutoff:
-            return FieldHelp("一条请求最多等多少秒。到点还没有结果，就记为超时。",
-                             "截止时间从实际发出时算起，须大于或等于告警时间。默认复用最多等 \(reuse.cutoff) 秒，新建最多等 \(fresh.cutoff) 秒。", .colors)
+            return FieldHelp("一条请求最多等待的秒数，到点计为超时。", "内置复用等待 8 秒，新建等待 10 秒。个人强度的截止须大于或等于提醒。", .colors)
         case .capacity:
             return FieldHelp("这一类最多能同时有几条请求在途。名额满时，下一轮会等到有空位再发。",
-                             "填写正整数。默认复用有 \(reuse.capacity) 个名额，新建有 \(fresh.capacity) 个。正在取消的请求会占用名额，直到连接释放。", .schedule)
+                             "填写正整数。内置强度中，只有新建快速允许 2 条在途，其他强度为 1 条。正在取消的请求会占用名额，直到连接释放。", .schedule)
         case .traffic:
-            return FieldHelp("按当前配置估算每小时探测流量，复用和新建分别计数。",
-                             "改间隔可预览这一类的新估值。单站窗口显示本站两类的开销，点「确定」后可在总窗口查看全部站点合计。", .cost)
+            return FieldHelp("按连续运行 8 小时、正常响应估算请求数和流量。",
+                             "满额等待或睡眠会减少请求数。复用遇到重连时流量会增加。配置窗口合计只纳入已勾选站点开启的方式。", .cost)
         }
     }
 
@@ -94,14 +92,14 @@ enum HelpRule: String, CaseIterable {
         case .colors: "可以。告警后、截止前收到预期状态码，仍计为成功，耗时显示为橙色。表中「复用」指两类都开启时的复用探测。"
         case .success: "圆点反映当前状态。成功率只统计最近 5 分钟已有最终结果的请求，左右分别是复用和新建。刚告警的请求还在等待，先前全部成功时仍会显示 100%。"
         case .cost: "流量按发起请求的类型归账。一次复用探测需要重新建连时，握手开销也记入复用列。"
-        case .history: "每个站点的两类探测分别统计。点「确定」暂存本站修改，回到总窗口点「保存」后才会影响正在运行的探测。"
+        case .history: "每个站点的两类探测分别统计。菜单选择立即生效。配置窗口的修改在保存后生效。"
         }
     }
 
     var rows: [[String]] {
         switch self {
         case .schedule:
-            let p = ProbeLane.daily.defaults
+            let p = ProbeLane.daily.strengths[0].values.parameters()
             return [["示例", "间隔 \(p.interval) 秒，截止 \(p.cutoff) 秒，只有 1 个名额"],
                     ["第 0 秒", "发出第一条请求，占用一个名额。"],
                     ["第 \(p.interval) 秒", "第一条仍在等待，记下一次待发机会。"],
@@ -126,11 +124,11 @@ enum HelpRule: String, CaseIterable {
     var note: String {
         switch self {
         case .schedule:
-            let slots = ProbeLane.daily.defaults.requiredCapacity.map { "本例需要 \($0) 个名额。" } ?? ""
+            let slots = ProbeLane.daily.strengths[0].values.parameters().requiredCapacity.map { "本例需要 \($0) 个名额。" } ?? ""
             return "持续无响应时，维持节奏所需的名额是截止时间除以间隔、向上取整。" + slots + "较小的值也可以保存。"
         case .colors: return "站点圆点和菜单栏箭头优先显示最严重的颜色。较新的请求已有判断后，旧请求仍可计入成功率。"
         case .success: return "按得到最终结果的时间计数。主动取消和等待中的请求跳过。首个样本完成即显示。全部失败显示 0，全部成功显示 100。当前没有样本或该类关闭时显示 —。"
-        case .cost: return "通常按最近约 5 分钟的请求估算。单类观察不足 1 分钟，或在草稿中改了间隔时，按配置频率估算。合计先加总再舍入。"
+        case .cost: return "菜单和配置窗口按 8 小时估算。悬停面板按近期完成的请求估算每小时开销，观察不足 1 分钟时按间隔估算。"
         case .history: return "取消编辑会丢弃本次草稿。代理软件内部换出口，若系统没有发出网络变化通知，统计会继续。"
         }
     }

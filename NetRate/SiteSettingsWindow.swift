@@ -1,54 +1,94 @@
 import AppKit
 
+private final class SettingsPanel: NSWindow {
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.intersection([.command, .control, .option, .shift]) == .command,
+           let editor = firstResponder as? NSTextView, editor.isFieldEditor {
+            switch event.charactersIgnoringModifiers?.lowercased() {
+            case "v": editor.paste(nil)
+            case "x": editor.cut(nil)
+            case "c": editor.copy(nil)
+            case "a": editor.selectAll(nil)
+            default: return super.performKeyEquivalent(with: event)
+            }
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+}
+
 @MainActor
 final class SiteSettingsWindow: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate {
-    private var draft: [ProbeSite]
-    private let finish: ([ProbeSite]?) throws -> Void
-    private var saved = false
-    private let estimate: ([ProbeSite]) -> ProbeEstimate
-    private var preview: ProbeEstimate
-    private var editor: SiteEditor?
+    struct ConfigurationFile {
+        let store: ProbeConfigurationStore
+        let startupError: Error?
+        let didReload: () -> Void
+    }
+
+    private struct TableRow {
+        let draft: SiteDraft
+        let details: Bool
+    }
+    private var rows: [TableRow]
+    private var drafts: [SiteDraft]
+    private var savedOrder: [String]
+    private var editors: [String: SiteEditor] = [:]
+    private var probingEnabled: Bool
+    private let configurationFile: ConfigurationFile?
+    private var configurationError: Error?
+    private let commit: ([ProbeSite]) throws -> Void
+    private let didClose: () -> Void
     private let footer = NSTextField(labelWithString: "")
+    private let feedback = NSTextField(wrappingLabelWithString: "")
     private let table = NSTableView()
     private let help = ConfigurationHelpWindow()
-    private lazy var edit = NSButton(title: "编辑站点", target: self, action: #selector(editSite))
-    private lazy var remove = NSButton(title: "删除", target: self, action: #selector(removeSite))
+    private lazy var remove = NSButton(title: "删除站点", target: self, action: #selector(removeSite))
     private lazy var up = NSButton(title: "上移", target: self, action: #selector(moveSiteUp))
     private lazy var down = NSButton(title: "下移", target: self, action: #selector(moveSiteDown))
+    private lazy var apply = NSButton(title: "应用", target: self, action: #selector(applyChanges))
+    private lazy var save = NSButton(title: "保存", target: self, action: #selector(saveChanges))
 
-    init(sites: [ProbeSite], estimate: @escaping ([ProbeSite]) -> ProbeEstimate, finish: @escaping ([ProbeSite]?) throws -> Void) {
-        draft = sites
-        preview = estimate(sites)
-        self.finish = finish
-        self.estimate = estimate
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 752, height: 324),
-                              styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+    init(sites: [ProbeSite], probingEnabled: Bool,
+         configurationFile: ConfigurationFile? = nil, didClose: @escaping () -> Void = {},
+         commit: @escaping ([ProbeSite]) throws -> Void) {
+        drafts = sites.map(SiteDraft.init)
+        rows = drafts.map { TableRow(draft: $0, details: false) }
+        savedOrder = sites.map(\.id)
+        self.probingEnabled = probingEnabled
+        self.configurationFile = configurationFile
+        configurationError = configurationFile?.startupError
+        self.commit = commit
+        self.didClose = didClose
+        let available = NSScreen.main?.visibleFrame.size ?? NSSize(width: 1000, height: 540)
+        let width = min(1000, available.width - 16)
+        let height = min(540, available.height - 48)
+        let window = SettingsPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+                                   styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         super.init(window: window)
         window.delegate = self
         window.title = "探测站点配置"
-        window.contentMinSize = NSSize(width: 595, height: 258)
+        window.contentMinSize = NSSize(width: min(width, 838), height: min(height, 320))
         window.center()
 
-        let columns: [(String, String, CGFloat, HelpField)] = [
-            ("enabled", "启用", 44, .siteEnabled), ("name", "站点", 125, .name), ("url", "HTTPS 地址", 302, .address),
-            ("daily", "复用预计流量/小时", 113, .traffic), ("fresh", "新建预计流量/小时", 113, .traffic)
-        ]
-        for (id, title, width, topic) in columns {
-            let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
-            column.title = title
-            column.headerToolTip = topic.tip()
-            column.headerCell.setAccessibilityHelp(topic.tip())
-            column.width = width
-            column.resizingMask = id == "url" ? .autoresizingMask : []
-            column.minWidth = id == "url" ? 100 : width
+        let widths: [SiteColumn: CGFloat] = [.name: 198, .method: 90, .codes: 154]
+        for key in SiteColumn.allCases {
+            let column = NSTableColumn(identifier: .init(key.rawValue))
+            column.title = key == .name ? "站点名称" : key.topic.rawValue
+            column.headerToolTip = key.topic.tip()
+            column.width = widths[key] ?? max(220, width - 486)
+            column.minWidth = key == .address ? 190 : column.width
+            column.resizingMask = key == .address ? .autoresizingMask : []
             table.addTableColumn(column)
         }
+        table.style = .plain
+        table.allowsColumnReordering = false
         table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
-        table.intercellSpacing = NSSize(width: 4, height: 2)
-        table.rowHeight = 28
+        table.floatsGroupRows = false
+        table.intercellSpacing = NSSize(width: 2, height: 2)
         table.usesAlternatingRowBackgroundColors = true
         table.delegate = self
         table.dataSource = self
+        table.setAccessibilityLabel("站点与探测强度")
         let scroll = NSScrollView()
         scroll.documentView = table
         scroll.hasVerticalScroller = true
@@ -57,9 +97,10 @@ final class SiteSettingsWindow: NSWindowController, NSWindowDelegate, NSTableVie
         let add = NSButton(title: "新增站点", target: self, action: #selector(addSite))
         let cancel = NSButton(title: "取消", target: self, action: #selector(cancelChanges))
         cancel.keyEquivalent = "\u{1b}"
-        let save = NSButton(title: "保存", target: self, action: #selector(saveChanges))
         save.keyEquivalent = "\r"
-        let actions = NSStackView(views: [add, edit, remove, up, down, help.makeButton(), NSView(), cancel, save])
+        apply.toolTip = "保存并应用修改，继续编辑。"
+        apply.setAccessibilityHelp(apply.toolTip)
+        let actions = NSStackView(views: [add, remove, up, down, help.makeButton(), NSView(), cancel, apply, save])
         for case let button as NSButton in actions.arrangedSubviews {
             button.setContentCompressionResistancePriority(.required, for: .horizontal)
         }
@@ -69,7 +110,29 @@ final class SiteSettingsWindow: NSWindowController, NSWindowDelegate, NSTableVie
         HelpField.traffic.attach(to: footer)
         footer.font = .systemFont(ofSize: 11)
         footer.textColor = .secondaryLabelColor
-        for view in [scroll, footer, actions] {
+        footer.lineBreakMode = .byTruncatingTail
+        feedback.font = .systemFont(ofSize: 12)
+        feedback.textColor = .systemRed
+        let messages = NSStackView(views: [footer, feedback])
+        messages.orientation = .vertical
+        messages.alignment = .leading
+        feedback.isHidden = true
+        let status = NSStackView(views: [messages])
+        status.orientation = .horizontal
+        status.alignment = .centerY
+        status.spacing = 8
+        if configurationFile != nil {
+            let fileMenu = NSPopUpButton(frame: .zero, pullsDown: true)
+            fileMenu.addItem(withTitle: "配置文件")
+            fileMenu.menu?.addItem(withTitle: "重新读取配置", action: #selector(reloadConfiguration), keyEquivalent: "").target = self
+            fileMenu.menu?.addItem(withTitle: "在 Finder 中显示", action: #selector(revealConfiguration), keyEquivalent: "").target = self
+            fileMenu.setContentCompressionResistancePriority(.required, for: .horizontal)
+            let spacer = NSView()
+            spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            status.addArrangedSubview(spacer)
+            status.addArrangedSubview(fileMenu)
+        }
+        for view in [scroll, status, actions] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
         }
@@ -77,9 +140,10 @@ final class SiteSettingsWindow: NSWindowController, NSWindowDelegate, NSTableVie
             scroll.topAnchor.constraint(equalTo: content.topAnchor, constant: 16),
             scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
             scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
-            scroll.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -9),
-            footer.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
-            footer.bottomAnchor.constraint(equalTo: actions.topAnchor, constant: -9),
+            scroll.bottomAnchor.constraint(equalTo: status.topAnchor, constant: -9),
+            status.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
+            status.trailingAnchor.constraint(equalTo: scroll.trailingAnchor),
+            status.bottomAnchor.constraint(equalTo: actions.topAnchor, constant: -9),
             actions.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
             actions.trailingAnchor.constraint(equalTo: scroll.trailingAnchor),
             actions.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -16)
@@ -95,144 +159,248 @@ final class SiteSettingsWindow: NSWindowController, NSWindowDelegate, NSTableVie
         window?.makeKeyAndOrderFront(nil)
     }
 
-    func numberOfRows(in tableView: NSTableView) -> Int { draft.count }
-
-    func tableView(_ tableView: NSTableView, viewFor column: NSTableColumn?, row: Int) -> NSView? {
-        let site = draft[row]
-        switch column?.identifier.rawValue {
-        case "enabled":
-            let checkbox = NSButton(checkboxWithTitle: "", target: self, action: #selector(toggleSite(_:)))
-            HelpField.siteEnabled.attach(to: checkbox)
-            checkbox.state = site.enabled ? .on : .off
-            checkbox.setAccessibilityLabel("启用 " + site.name)
-            let cell = NSView()
-            checkbox.translatesAutoresizingMaskIntoConstraints = false
-            cell.addSubview(checkbox)
-            NSLayoutConstraint.activate([
-                checkbox.centerXAnchor.constraint(equalTo: cell.centerXAnchor),
-                checkbox.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
-            ])
-            return cell
-        case "name":
-            return label(site.isBuiltIn ? site.name + "（内置）" : site.name)
-        case "daily", "fresh":
-            let kind: ProbeLane = column?.identifier.rawValue == "daily" ? .daily : .fresh
-            return label(ProbeUsage.display(preview.sites[site.id]?[kind] ?? 0, perHour: false), alignment: .right, topic: .traffic)
-        default:
-            return label(site.url.absoluteString)
+    func syncMenu(_ config: ProbeConfiguration) {
+        probingEnabled = config.probingEnabled
+        let live = Dictionary(uniqueKeysWithValues: config.sites.map { ($0.id, $0) })
+        for draft in drafts {
+            guard let site = live[draft.id] else { continue }
+            if draft.sync(site) {
+                editors[draft.id]?.rebuild()
+                if let row = rowIndex(draft, details: true) {
+                    table.noteHeightOfRows(withIndexesChanged: IndexSet(integer: row))
+                }
+                showFeedback("已保留从菜单选中的个人强度。")
+            } else {
+                editors[draft.id]?.refresh()
+            }
         }
+        refreshActions()
     }
 
-    private func label(_ text: String, alignment: NSTextAlignment = .left, topic: HelpField? = nil) -> NSView {
-        let field = NSTextField(labelWithString: text)
-        field.alignment = alignment
-        field.lineBreakMode = .byTruncatingTail
-        if let topic { topic.attach(to: field) } else { field.toolTip = text }
-        let cell = NSView()
-        field.translatesAutoresizingMaskIntoConstraints = false
-        cell.addSubview(field)
-        NSLayoutConstraint.activate([
-            field.leadingAnchor.constraint(equalTo: cell.leadingAnchor),
-            field.trailingAnchor.constraint(equalTo: cell.trailingAnchor),
-            field.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
-        ])
-        return cell
+    private func editor(for draft: SiteDraft) -> SiteEditor {
+        if let editor = editors[draft.id] { return editor }
+        let editor = SiteEditor(draft: draft) { [weak self, weak draft] resized in
+            guard let self, let draft else { return }
+            if resized {
+                updateRows(selecting: draft)
+            } else if let row = rowIndex(draft), table.selectedRow != row {
+                table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            }
+            showFeedback(nil)
+            refreshActions()
+        }
+        editors[draft.id] = editor
+        return editor
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
+
+    func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool { rows[row].details }
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { !rows[row].details }
+
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        rows[row].details ? editor(for: rows[row].draft).rowHeight : 29
+    }
+
+    func tableView(_ tableView: NSTableView, viewFor column: NSTableColumn?, row: Int) -> NSView? {
+        let entry = rows[row]
+        let editor = editor(for: entry.draft)
+        if entry.details { return editor }
+        guard let column, let key = SiteColumn(rawValue: column.identifier.rawValue) else { return nil }
+        return editor.siteCell(key)
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) { refreshActions() }
 
-    private var selectedRow: Int? {
-        let row = table.selectedRow
-        return draft.indices.contains(row) ? row : nil
+    private func rowIndex(_ draft: SiteDraft, details: Bool = false) -> Int? {
+        rows.firstIndex { $0.draft === draft && $0.details == details }
     }
 
-    func refreshEstimate() {
-        let next = estimate(draft)
-        let changed = IndexSet(draft.indices.filter { next.sites[draft[$0].id] != preview.sites[draft[$0].id] })
-        preview = next
-        footer.stringValue = next.footer
-        if !changed.isEmpty {
-            table.reloadData(forRowIndexes: changed, columnIndexes: IndexSet(integersIn: 3...4))
+    private var selectedRow: Int? {
+        let row = table.selectedRow
+        guard rows.indices.contains(row) else { return nil }
+        return drafts.firstIndex { $0 === rows[row].draft }
+    }
+
+    // A visible table row and a position in the saved site order differ when any site is expanded.
+    private func updateRows(selecting draft: SiteDraft? = nil, scroll: Bool = false) {
+        rows = drafts.flatMap { item in
+            let parent = TableRow(draft: item, details: false)
+            return item.expanded ? [parent, TableRow(draft: item, details: true)] : [parent]
         }
-        editor?.refreshPreview()
+        table.reloadData()
+        if let draft, let row = rowIndex(draft) {
+            table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            if scroll { table.scrollRowToVisible(row) }
+        }
+        table.layoutSubtreeIfNeeded()
+        refreshActions()
+    }
+
+    private func refreshBudget() {
+        var total = ProbeBudget()
+        for draft in drafts where draft.source.enabled {
+            for lane in ProbeLane.allCases where draft.source[strength: lane].enabled {
+                guard let strength = draft.selected(lane) else {
+                    footer.stringValue = "全部站点合计 · 请先完成探测强度参数"
+                    return
+                }
+                total.add(.init(lane: lane, interval: strength.values.interval))
+            }
+        }
+        footer.stringValue = "全部站点合计 · " + (probingEnabled ? "预计 8 小时　" : "恢复探测后预计 8 小时　") + total.display
     }
 
     private func refreshActions() {
-        refreshEstimate()
+        refreshBudget()
+        if let configurationError { showFeedback(configurationError.localizedDescription) }
         let row = selectedRow
-        edit.isEnabled = row != nil
-        remove.isEnabled = row.map { !draft[$0].isBuiltIn } ?? false
+        remove.isEnabled = row.map { !drafts[$0].source.isBuiltIn } ?? false
         up.isEnabled = row.map { $0 > 0 } ?? false
-        down.isEnabled = row.map { $0 < draft.count - 1 } ?? false
+        down.isEnabled = row.map { $0 + 1 < drafts.count } ?? false
+        apply.isEnabled = configurationError == nil && dirty
+        save.isEnabled = configurationError == nil
     }
 
-    @objc private func toggleSite(_ sender: NSButton) {
-        let row = table.row(for: sender)
-        guard draft.indices.contains(row) else { return }
-        if sender.state == .on && !draft[row].daily.enabled && !draft[row].fresh.enabled {
-            sender.state = .off
-            showEditor(row: row, enabling: true)
-            return
-        }
-        draft[row].enabled = sender.state == .on
-        refreshEstimate()
+    private func showFeedback(_ message: String?) {
+        feedback.stringValue = message ?? ""
+        feedback.isHidden = message == nil
+        feedback.toolTip = configurationFile?.store.url.path(percentEncoded: false)
+        if message != nil { NSAccessibility.post(element: feedback, notification: .valueChanged) }
     }
 
-    @objc private func addSite() { showEditor(row: nil) }
-
-    @objc private func editSite() {
-        if let row = selectedRow { showEditor(row: row) }
+    @objc private func addSite() {
+        let draft = SiteDraft.new()
+        drafts.append(draft)
+        updateRows(selecting: draft, scroll: true)
+        editor(for: draft).focus(.address)
     }
 
     @objc private func removeSite() {
-        guard let row = selectedRow, !draft[row].isBuiltIn else { return }
-        draft.remove(at: row)
-        table.reloadData()
-        refreshActions()
+        guard let row = selectedRow, !drafts[row].source.isBuiltIn else { return }
+        editors.removeValue(forKey: drafts[row].id)
+        drafts.remove(at: row)
+        updateRows(selecting: drafts.isEmpty ? nil : drafts[min(row, drafts.count - 1)])
     }
 
-    @objc private func moveSiteUp() { moveSelectedSite(by: -1) }
-    @objc private func moveSiteDown() { moveSelectedSite(by: 1) }
-
-    private func moveSelectedSite(by offset: Int) {
-        guard let row = selectedRow else { return }
-        let destination = row + offset
-        guard draft.indices.contains(destination) else { return }
-        draft.swapAt(row, destination)
-        table.reloadData(forRowIndexes: IndexSet([row, destination]),
-                         columnIndexes: IndexSet(integersIn: 0..<table.numberOfColumns))
-        table.selectRowIndexes(IndexSet(integer: destination), byExtendingSelection: false)
-        table.scrollRowToVisible(destination)
-        refreshActions()
+    @objc private func moveSiteUp() { move(by: -1) }
+    @objc private func moveSiteDown() { move(by: 1) }
+    private func move(by offset: Int) {
+        guard let row = selectedRow, drafts.indices.contains(row + offset) else { return }
+        let selected = drafts[row]
+        drafts.swapAt(row, row + offset)
+        updateRows(selecting: selected, scroll: true)
     }
 
-    private func showEditor(row: Int?, enabling: Bool = false) {
-        guard let window else { return }
-        var site = row.map { draft[$0] }
-        if enabling { site?.enabled = true }
-        let editor = SiteEditor(site: site, help: help) { [estimate] candidate in
-            estimate([candidate]).sites[candidate.id] ?? SiteTraffic()
-        }
-        self.editor = editor
-        window.beginSheet(editor.sheet) { [weak self] response in
-            guard let self else { return }
-            self.editor = nil
-            if response == .OK, let value = editor.saved {
-                if let row { self.draft[row] = value } else { self.draft.append(value) }
-                self.table.reloadData()
-                self.table.selectRowIndexes(IndexSet(integer: row ?? self.draft.count - 1), byExtendingSelection: false)
+    private var dirty: Bool {
+        drafts.map(\.id) != savedOrder || drafts.contains(where: \.isDirty)
+    }
+
+    @objc private func reloadConfiguration() {
+        guard let configurationFile, let window, window.attachedSheet == nil else { return }
+        do {
+            let candidate = try configurationFile.store.read()
+            if !dirty {
+                applyReload(candidate, file: configurationFile)
+                return
             }
-            self.refreshActions()
+            let alert = NSAlert()
+            alert.messageText = "有未保存的站点修改"
+            alert.informativeText = "重新读取会丢弃窗口里的修改。"
+            alert.addButton(withTitle: "继续编辑").keyEquivalent = "\u{1b}"
+            alert.addButton(withTitle: "丢弃并重新读取")
+            alert.beginSheetModal(for: window) { [weak self] response in
+                if response == .alertSecondButtonReturn { self?.applyReload(candidate, file: configurationFile) }
+            }
+        } catch {
+            showConfigurationError(error)
         }
+    }
+
+    private func applyReload(_ candidate: ProbeConfigurationStore.Snapshot, file: ConfigurationFile) {
+        do {
+            try file.store.accept(candidate)
+            configurationError = nil
+            editors.removeAll()
+            drafts = candidate.configuration.sites.map(SiteDraft.init)
+            savedOrder = drafts.map(\.id)
+            probingEnabled = candidate.configuration.probingEnabled
+            showFeedback(nil)
+            updateRows()
+            file.didReload()
+            refreshActions()
+        } catch {
+            showConfigurationError(error)
+        }
+    }
+
+    @objc private func revealConfiguration() {
+        guard let url = configurationFile?.store.url else { return }
+        if FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } else {
+            let directory = url.deletingLastPathComponent()
+            let existing = FileManager.default.fileExists(atPath: directory.path(percentEncoded: false))
+            NSWorkspace.shared.open(existing ? directory : directory.deletingLastPathComponent())
+        }
+    }
+
+    private func showConfigurationError(_ error: Error) {
+        guard let window else { return }
+        let alert = NSAlert(error: error)
+        if let configurationFile {
+            alert.informativeText = configurationFile.store.url.path(percentEncoded: false)
+        }
+        alert.beginSheetModal(for: window)
+    }
+
+    private func focus(_ field: SiteFormField, in draft: SiteDraft) {
+        if let row = rowIndex(draft, details: field.lane != nil) {
+            table.scrollRowToVisible(row)
+            table.layoutSubtreeIfNeeded()
+        }
+        editor(for: draft).focus(field)
     }
 
     @objc private func saveChanges() {
+        if commitChanges() { close() }
+    }
+
+    @objc private func applyChanges() {
+        if dirty { _ = commitChanges() }
+    }
+
+    private func commitChanges() -> Bool {
+        var sites: [ProbeSite] = []
+        for draft in drafts {
+            do {
+                sites.append(try draft.build())
+            } catch {
+                let field = (error as? SiteInputError)?.field
+                if let lane = field?.lane {
+                    draft.expanded = true
+                    draft.openLanes.insert(lane)
+                    editor(for: draft).rebuild()
+                }
+                updateRows(selecting: draft, scroll: true)
+                if let field { focus(field, in: draft) }
+                showFeedback(draft.title + "：" + error.localizedDescription)
+                return false
+            }
+        }
         do {
-            try finish(draft)
-            saved = true
-            close()
+            try commit(sites)
+            for (draft, site) in zip(drafts, sites) {
+                draft.markCommitted(site)
+                editors[draft.id]?.refresh()
+            }
+            savedOrder = sites.map(\.id)
+            showFeedback(nil)
+            refreshActions()
+            return true
         } catch {
-            if let window { NSAlert(error: error).beginSheetModal(for: window) }
+            showConfigurationError(error)
+            return false
         }
     }
 
@@ -240,6 +408,6 @@ final class SiteSettingsWindow: NSWindowController, NSWindowDelegate, NSTableVie
 
     func windowWillClose(_ notification: Notification) {
         help.dismiss()
-        if !saved { try? finish(nil) }
+        didClose()
     }
 }

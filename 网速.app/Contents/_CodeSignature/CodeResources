@@ -5,7 +5,24 @@
 	<key>files</key>
 	<dict/>
 	<key>files2</key>
-	<dict/>
+	<dict>
+		<key>Library/LaunchDaemons/com.smartgrey.netrate.sleep-helper.plist</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			CoA0andh/RE5ZmJuGyffGsssicpB89y6TTqOu/8IoDk=
+			</data>
+		</dict>
+		<key>MacOS/NetRateSleepHelper</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			5ANfJImtw48TOXytILbkuVgT+h0=
+			</data>
+			<key>requirement</key>
+			<string>anchor apple generic and identifier "com.smartgrey.netrate.sleep-helper" and (certificate leaf[field.1.2.840.113635.100.6.1.9] /* exists */ or certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = FUVR62L3Z9)</string>
+		</dict>
+	</dict>
 	<key>rules</key>
 	<dict>
 		<key>^Resources/</key>

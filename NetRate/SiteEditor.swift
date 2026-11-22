@@ -1,233 +1,599 @@
 import AppKit
 
-// Accessory apps have no Edit menu to route standard field-editor shortcuts.
-private final class EditorPanel: NSPanel {
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.modifierFlags.intersection([.command, .control, .option, .shift]) == .command,
-           let field = firstResponder as? NSTextView, field.isFieldEditor, field.isEditable {
-            switch event.charactersIgnoringModifiers?.lowercased() {
-            case "v": field.paste(nil)
-            case "x": field.cut(nil)
-            case "c": field.copy(nil)
-            case "a": field.selectAll(nil)
-            default: return super.performKeyEquivalent(with: event)
-            }
-            return true
+enum SiteFormField: Hashable {
+    case address, codes, personalName(ProbeLane, String), number(ProbeLane, String, Int)
+
+    var lane: ProbeLane? {
+        switch self {
+        case .address, .codes: nil
+        case let .personalName(lane, _), let .number(lane, _, _): lane
         }
-        return super.performKeyEquivalent(with: event)
+    }
+}
+
+struct SiteInputError: LocalizedError {
+    let field: SiteFormField
+    let cause: Error
+    var errorDescription: String? { (field.lane.map { $0.title + "探测强度：" } ?? "") + cause.localizedDescription }
+}
+
+// Keep the original text, including incomplete numbers and URLs, while rows are folded or off screen.
+struct StrengthInput: Equatable {
+    let id: String
+    var name: String
+    var numbers: [String]
+
+    init(_ strength: ProbeStrength) {
+        id = strength.id
+        name = strength.name
+        let v = strength.values
+        numbers = [v.interval, v.warning, v.cutoff, v.capacity].map(String.init)
+    }
+
+    func strength(for lane: ProbeLane) throws -> ProbeStrength {
+        let numbers = try numbers.enumerated().map { column, text in
+            guard let value = Int(text.trimmingCharacters(in: .whitespaces)), value > 0 else {
+                throw SiteInputError(field: .number(lane, id, column), cause: SiteConfigurationError.invalidNumber)
+            }
+            return value
+        }
+        let values = StrengthValues(interval: numbers[0], warning: numbers[1], cutoff: numbers[2], capacity: numbers[3])
+        do { try values.parameters().validate() }
+        catch { throw SiteInputError(field: .number(lane, id, 2), cause: error) }
+        return ProbeStrength(id: id, name: name.trimmingCharacters(in: .whitespacesAndNewlines), values: values)
+    }
+}
+
+struct SiteForm: Equatable {
+    var name: String
+    var address: String
+    var method: ProbeMethod
+    var codes: String
+    var personal: [ProbeLane: [StrengthInput]]
+
+    init(_ site: ProbeSite) {
+        name = site.name
+        address = site.url.absoluteString
+        method = site.method
+        codes = site.isBuiltIn ? "204" : site.statusCodes.text
+        personal = Dictionary(uniqueKeysWithValues: ProbeLane.allCases.map { ($0, site[strength: $0].personal.map(StrengthInput.init)) })
+    }
+}
+
+final class SiteDraft {
+    private(set) var source: ProbeSite
+    private var savedForm: SiteForm
+    var form: SiteForm
+    var expanded = false
+    var openLanes = Set<ProbeLane>()
+    var id: String { source.id }
+    var isDirty: Bool { form != savedForm }
+
+    init(_ site: ProbeSite) {
+        source = site
+        form = SiteForm(site)
+        savedForm = form
+    }
+
+    func markCommitted(_ site: ProbeSite) {
+        source = site
+        savedForm = form
+    }
+
+    static func new() -> SiteDraft {
+        var site = ProbeSite(id: UUID().uuidString, name: "", url: URL(string: "about:blank")!, enabled: false)
+        site[strength: .daily] = LaneStrength(enabled: false, selectedID: "balanced")
+        site[strength: .fresh] = LaneStrength(selectedID: "balanced")
+        let draft = SiteDraft(site)
+        draft.form.address = ""
+        return draft
+    }
+
+    // Menu writes own the live selection. A draft owns only the endpoint, ordering and personal library.
+    @discardableResult
+    func sync(_ live: ProbeSite) -> Bool {
+        source = live
+        var restored = false
+        for lane in ProbeLane.allCases {
+            let selection = live[strength: lane]
+            if selection.enabled,
+               let selected = selection.personal.first(where: { $0.id == selection.selectedID }),
+               form.personal[lane]?.contains(where: { $0.id == selected.id }) != true {
+                form.personal[lane, default: []].append(StrengthInput(selected))
+                restored = true
+            }
+        }
+        return restored
+    }
+
+    func build() throws -> ProbeSite {
+        var site = source
+        if !site.isBuiltIn {
+            let codes: StatusCodes
+            do { codes = try StatusCodes(form.codes) }
+            catch { throw SiteInputError(field: .codes, cause: error) }
+            let endpoint: ProbeSite
+            do {
+                endpoint = try ProbeSite.custom(id: id, name: form.name, address: form.address, enabled: site.enabled, statusCodes: codes)
+            } catch { throw SiteInputError(field: .address, cause: error) }
+            site.name = endpoint.name
+            site.url = endpoint.url
+            site.method = form.method
+            site.statusCodes = endpoint.statusCodes
+        }
+        for lane in ProbeLane.allCases {
+            site[strength: lane].personal = try (form.personal[lane] ?? []).map { try $0.strength(for: lane) }
+            site[strength: lane].selectedID = selectedID(lane)
+            do { try site[strength: lane].validate(for: lane) }
+            catch let issue as InvalidStrengthIdentity {
+                throw SiteInputError(field: .personalName(lane, issue.id), cause: issue)
+            }
+        }
+        try site.validate()
+        return site
+    }
+
+    func selectedID(_ lane: ProbeLane) -> String {
+        let selection = source[strength: lane]
+        // The file still requires a valid selection when a probe is stopped.
+        if !selection.enabled, selection.personal.contains(where: { $0.id == selection.selectedID }),
+           form.personal[lane]?.contains(where: { $0.id == selection.selectedID }) != true {
+            return "balanced"
+        }
+        return selection.selectedID
+    }
+
+    func canRemoveStrength(_ id: String, lane: ProbeLane) -> Bool {
+        let selection = source[strength: lane]
+        return !selection.enabled || selection.selectedID != id
+    }
+
+    func selected(_ lane: ProbeLane) -> ProbeStrength? {
+        let id = selectedID(lane)
+        if let builtIn = lane.strengths.first(where: { $0.id == id }) { return builtIn }
+        return try? form.personal[lane]?.first { $0.id == id }?.strength(for: lane)
+    }
+
+    var title: String {
+        if !form.name.isEmpty { return form.name }
+        return URLComponents(string: form.address)?.host ?? "新增站点"
     }
 }
 
 @MainActor
-final class SiteEditor: NSObject, NSTextFieldDelegate {
-    @MainActor
-    private final class LaneFields {
-        static let numericFields: [(HelpField, String)] = [(.interval, "间隔（秒）"), (.warning, "告警（秒）"),
-                                                          (.cutoff, "截止（秒）"), (.capacity, "并发")]
-        let toggle = NSButton(checkboxWithTitle: "", target: nil, action: nil)
-        let numbers: [NSTextField]
-        let rate = NSTextField(labelWithString: "—")
-        private var lastValid: ProbeParameters
+final class FormButton: NSButton {
+    private let handler: () -> Void
+    init(_ title: String, action: @escaping () -> Void) {
+        handler = action
+        super.init(frame: .zero)
+        self.title = title
+        bezelStyle = .rounded
+        target = self
+        self.action = #selector(activate)
+    }
+    required init?(coder: NSCoder) { nil }
+    @objc private func activate() { handler() }
+}
 
-        init(kind: ProbeLane, parameters: ProbeParameters) {
-            lastValid = parameters
-            toggle.setAccessibilityLabel("启用" + kind.title)
-            HelpField.laneEnabled.attach(to: toggle)
-            toggle.state = parameters.enabled ? .on : .off
-            let values = [parameters.interval, parameters.warning, parameters.cutoff, parameters.capacity]
-            numbers = zip(Self.numericFields, values).map { spec, value in
-                let field = NSTextField(string: String(value))
-                field.alignment = .right
-                field.setAccessibilityLabel(kind.title + spec.1)
-                spec.0.attach(to: field)
-                field.widthAnchor.constraint(equalToConstant: 59).isActive = true
-                return field
-            }
-            HelpField.traffic.attach(to: rate)
-            rate.alignment = .right
-            rate.setAccessibilityLabel(kind.title + "每小时预计流量")
-        }
+@MainActor
+private final class FormField: NSTextField, NSTextFieldDelegate {
+    let changed: (String) -> Void
+    init(_ text: String, label: String, topic: HelpField, locked: Bool = false, changed: @escaping (String) -> Void) {
+        self.changed = changed
+        super.init(frame: .zero)
+        stringValue = text
+        isEditable = !locked
+        isSelectable = true
+        isBezeled = !locked
+        drawsBackground = !locked
+        lineBreakMode = .byTruncatingTail
+        setAccessibilityLabel(label)
+        topic.attach(to: self, readOnly: locked)
+        delegate = self
+    }
+    required init?(coder: NSCoder) { nil }
+    func controlTextDidChange(_ obj: Notification) { changed(stringValue) }
+}
 
-        func parameters() throws -> ProbeParameters {
-            do {
-                let value = try readNumbers()
-                lastValid = value
-                return value
-            } catch {
-                guard toggle.state == .off else { throw error }
-                lastValid.enabled = false
-                let values = [lastValid.interval, lastValid.warning, lastValid.cutoff, lastValid.capacity]
-                for (field, value) in zip(numbers, values) { field.stringValue = String(value) }
-                return lastValid
-            }
-        }
+@MainActor
+private final class FormPopup: NSPopUpButton {
+    let changed: (Int) -> Void
+    init(titles: [String], changed: @escaping (Int) -> Void) {
+        self.changed = changed
+        super.init(frame: .zero, pullsDown: false)
+        addItems(withTitles: titles)
+        target = self
+        action = #selector(picked)
+    }
+    required init?(coder: NSCoder) { nil }
+    @objc private func picked() { changed(indexOfSelectedItem) }
+}
 
-        private func readNumbers() throws -> ProbeParameters {
-            let values = try numbers.map { field in
-                guard let number = Int(field.stringValue.trimmingCharacters(in: .whitespaces)), number > 0 else {
-                    throw SiteConfigurationError.invalidNumber
-                }
-                return number
-            }
-            let result = ProbeParameters(enabled: toggle.state == .on, interval: values[0], warning: values[1],
-                                         cutoff: values[2], capacity: values[3])
-            try result.validate()
-            return result
+enum SiteColumn: String, CaseIterable {
+    case name, address, method, codes
+    var topic: HelpField {
+        switch self {
+        case .name: .name
+        case .address: .address
+        case .method: .method
+        case .codes: .codes
         }
     }
+}
 
-    let sheet: NSPanel = EditorPanel(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
-    private(set) var saved: ProbeSite?
-    private let original: ProbeSite
-    private let name: NSTextField
-    private let address: NSTextField
-    private let method = NSPopUpButton()
-    private let codes: NSTextField
-    private var rows: [ProbeLane: LaneFields] = [:]
-    private let hint = NSTextField(wrappingLabelWithString: "")
-    private let error = NSTextField(wrappingLabelWithString: "")
-    private let preview: (ProbeSite) -> SiteTraffic
+/// The table supplies native column cells for the site and one full-width detail row beneath it.
+@MainActor
+final class SiteEditor: NSView {
+    let draft: SiteDraft
+    private let grid = NSGridView()
+    private let onChange: (Bool) -> Void
+    private var cells: [SiteColumn: NSView] = [:]
+    private var fields: [SiteFormField: NSTextField] = [:]
+    private var arrow: NSButton?
+    private var siteNote: NSTextField?
+    private var laneLabels: [ProbeLane: [NSTextField]] = [:]
+    private var addMenus: [ProbeLane: NSPopUpButton] = [:]
+    private struct PersonalRow {
+        let mark: NSTextField
+        let count: NSTextField
+        let traffic: NSTextField
+        let remove: NSButton
+    }
+    private var personalRows: [ProbeLane: [String: PersonalRow]] = [:]
+    private static let numberTopics: [HelpField] = [.interval, .warning, .cutoff, .capacity]
+    // Only the strength name grows. Keeping the numeric columns identical makes comparisons possible across sites.
+    private static let widths: [CGFloat?] = [108, nil, 60, 60, 60, 42, 100, 82, 106]
 
-    init(site: ProbeSite?, help: ConfigurationHelpWindow, preview: @escaping (ProbeSite) -> SiteTraffic) {
-        original = site ?? ProbeSite(id: UUID().uuidString, name: "", url: URL(string: "about:blank")!, enabled: true)
-        name = NSTextField(string: site?.name ?? "")
-        address = NSTextField(string: site?.url.absoluteString ?? "")
-        codes = NSTextField(string: original.isBuiltIn ? "204" : original.statusCodes.text)
-        self.preview = preview
-        super.init()
-        sheet.title = site == nil ? "新增站点" : "编辑站点"
-        name.placeholderString = "留空时使用主机名"
-        address.placeholderString = "https://example.com/"
-        codes.placeholderString = "例如 2xx, 405，留空接受 2xx"
-        method.addItems(withTitles: ProbeMethod.allCases.map(\.rawValue))
-        method.selectItem(withTitle: original.method.rawValue)
-        method.isEnabled = !original.isBuiltIn
-        method.target = self
-        method.action = #selector(changed)
-        method.setAccessibilityLabel(HelpField.method.rawValue)
-        HelpField.method.attach(to: method, readOnly: original.isBuiltIn)
-        let shared = NSGridView()
-        let sharedFields: [(HelpField, NSTextField)] = [(.name, name), (.address, address), (.codes, codes)]
-        func label(_ topic: HelpField) -> NSTextField {
-            let label = NSTextField(labelWithString: topic.rawValue)
-            topic.attach(to: label, readOnly: original.isBuiltIn)
-            return label
-        }
-        for (topic, field) in sharedFields {
-            field.delegate = self
-            field.setAccessibilityLabel(topic.rawValue)
-            topic.attach(to: field, readOnly: original.isBuiltIn)
-            field.isEditable = !original.isBuiltIn
-            field.lineBreakMode = .byTruncatingTail
-            field.widthAnchor.constraint(equalToConstant: 388).isActive = true
-            shared.addRow(with: [label(topic), field])
-        }
-        shared.addRow(with: [label(.method), method])
-        shared.column(at: 1).xPlacement = .leading
-        shared.yPlacement = .center
-        shared.rowSpacing = 6
-
-        let grid = NSGridView()
-        let columns: [(HelpField, String)] = [(.laneEnabled, "启用"), (.type, "类型")] +
-            LaneFields.numericFields + [(.traffic, "预计流量/小时")]
-        let headers = columns.map { topic, title in
-            let label = NSTextField(labelWithString: title)
-            topic.attach(to: label)
-            label.font = .systemFont(ofSize: 11)
-            label.textColor = .secondaryLabelColor
-            return label
-        }
-        grid.addRow(with: headers)
-        for kind in ProbeLane.allCases {
-            let fields = LaneFields(kind: kind, parameters: original[kind])
-            rows[kind] = fields
-            fields.numbers.forEach { $0.delegate = self }
-            fields.toggle.target = self
-            fields.toggle.action = #selector(changed)
-            let type = NSTextField(labelWithString: kind.title)
-            HelpField.type.attach(to: type, lane: kind)
-            grid.addRow(with: [fields.toggle, type] + fields.numbers + [fields.rate])
-        }
-        grid.xPlacement = .trailing
+    init(draft: SiteDraft, onChange: @escaping (Bool) -> Void) {
+        self.draft = draft
+        self.onChange = onChange
+        super.init(frame: .zero)
+        grid.rowSpacing = 2
+        grid.columnSpacing = 7
+        grid.xPlacement = .fill
         grid.yPlacement = .center
-        grid.columnSpacing = 12
-        grid.rowSpacing = 7
-        let divider = NSBox()
-        divider.boxType = .separator
-        let cancel = NSButton(title: "取消", target: self, action: #selector(cancel))
-        cancel.keyEquivalent = "\u{1b}"
-        let save = NSButton(title: "确定", target: self, action: #selector(accept))
-        save.keyEquivalent = "\r"
-        let actions = NSStackView(views: [help.makeButton(), NSView(), cancel, save])
-        actions.orientation = .horizontal
-        hint.font = .systemFont(ofSize: 11)
-        hint.textColor = .secondaryLabelColor
-        error.font = .systemFont(ofSize: 12)
-        error.textColor = .systemRed
-        let stack = NSStackView(views: [shared, divider, grid, hint, error, actions])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 10
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 18, bottom: 16, right: 18)
-        let width = max(shared.fittingSize.width, grid.fittingSize.width)
-        for view in [divider, hint, error, actions] {
-            view.widthAnchor.constraint(equalToConstant: width).isActive = true
+        grid.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(grid)
+        NSLayoutConstraint.activate([
+            grid.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
+            grid.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            grid.topAnchor.constraint(equalTo: topAnchor, constant: 2)
+        ])
+        rebuild()
+    }
+
+    required init?(coder: NSCoder) { nil }
+    var rowHeight: CGFloat { grid.fittingSize.height + 6 }
+    var addressField: NSTextField? { fields[.address] }
+
+    private func text(_ value: String = "", secondary: Bool = false) -> NSTextField {
+        let label = NSTextField(labelWithString: value)
+        label.font = .systemFont(ofSize: 12)
+        label.textColor = secondary ? .secondaryLabelColor : .labelColor
+        label.lineBreakMode = .byTruncatingTail
+        return label
+    }
+
+    private func disclosure(_ label: String, open: Bool, action: @escaping () -> Void) -> NSButton {
+        let button = FormButton("", action: action)
+        button.bezelStyle = .disclosure
+        button.setButtonType(.pushOnPushOff)
+        button.state = open ? .on : .off
+        button.setAccessibilityLabel(label)
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        return button
+    }
+
+    func siteCell(_ column: SiteColumn) -> NSView {
+        if let cell = cells[column] { return cell }
+        let locked = draft.source.isBuiltIn
+        func input(_ key: WritableKeyPath<SiteForm, String>, _ placeholder: String) -> NSTextField {
+            let field = FormField(draft.form[keyPath: key], label: column.topic.rawValue, topic: column.topic, locked: locked) { [weak self] value in
+                self?.draft.form[keyPath: key] = value
+                self?.changed()
+            }
+            field.placeholderString = placeholder
+            field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            return field
         }
-        // Reserve room for both capacity hints and an inline validation message.
-        hint.heightAnchor.constraint(equalToConstant: 32).isActive = true
-        error.heightAnchor.constraint(equalToConstant: 18).isActive = true
-        sheet.contentView = stack
-        sheet.setContentSize(stack.fittingSize)
-        sheet.initialFirstResponder = original.isBuiltIn ? rows[.daily]?.toggle : (site == nil ? address : name)
-        refreshPreview()
-    }
-
-    func controlTextDidChange(_ obj: Notification) { changed() }
-
-    @objc private func changed() {
-        error.stringValue = ""
-        refreshPreview()
-    }
-
-    private func sharedSite() throws -> ProbeSite {
-        if original.isBuiltIn { return original }
-        var site = try ProbeSite.custom(id: original.id, name: name.stringValue, address: address.stringValue,
-                                        enabled: original.enabled, statusCodes: StatusCodes(codes.stringValue))
-        site.method = ProbeMethod(rawValue: method.titleOfSelectedItem ?? "") ?? .head
-        return site
-    }
-
-    func refreshPreview() {
-        var site = (try? sharedSite()) ?? original
-        var hints: [String] = []
-        for kind in ProbeLane.allCases {
-            guard let fields = rows[kind] else { continue }
-            let active = fields.toggle.state == .on
-            for field in fields.numbers { field.isEnabled = active }
-            var settings = (try? fields.parameters()) ?? original[kind]
-            settings.enabled = active
-            site[kind] = settings
-            if let hint = settings.capacityHint { hints.append(kind.title + "：" + hint) }
+        let control: NSView
+        switch column {
+        case .name:
+            let toggle = disclosure("展开或折叠" + draft.title, open: draft.expanded) { [weak self] in self?.toggle() }
+            arrow = toggle
+            let name = input(\.name, "留空使用主机名")
+            let note = text("", secondary: true)
+            note.font = .systemFont(ofSize: 11)
+            note.setContentCompressionResistancePriority(.required, for: .horizontal)
+            siteNote = note
+            let line = NSStackView(views: [toggle, name, note])
+            line.spacing = 4
+            line.distribution = .fill
+            control = line
+        case .address:
+            let field = input(\.address, "https://example.com/")
+            fields[.address] = field
+            control = field
+        case .method where locked:
+            let method = text(draft.form.method.rawValue)
+            method.setAccessibilityLabel(column.topic.rawValue)
+            column.topic.attach(to: method, readOnly: true)
+            control = method
+        case .method:
+            let method = FormPopup(titles: ProbeMethod.allCases.map(\.rawValue)) { [weak self] index in
+                self?.draft.form.method = ProbeMethod.allCases[index]
+                self?.changed()
+            }
+            method.selectItem(withTitle: draft.form.method.rawValue)
+            method.setAccessibilityLabel(column.topic.rawValue)
+            column.topic.attach(to: method, readOnly: locked)
+            control = method
+        case .codes:
+            let field = input(\.codes, "2xx")
+            fields[.codes] = field
+            control = field
         }
-        let estimate = preview(site)
-        for (kind, fields) in rows {
-            fields.rate.stringValue = ProbeUsage.display(estimate[kind], perHour: false)
-        }
-        hint.stringValue = hints.joined(separator: "\n")
+        let cell = NSView()
+        control.translatesAutoresizingMaskIntoConstraints = false
+        cell.addSubview(control)
+        NSLayoutConstraint.activate([
+            control.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 3),
+            control.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
+            control.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
+        ])
+        cells[column] = cell
+        updateSite()
+        return cell
     }
 
-    @objc private func accept() {
-        do {
-            var site = try sharedSite()
-            for (kind, fields) in rows { site[kind] = try fields.parameters() }
-            try site.validate()
-            saved = site
-            sheet.sheetParent?.endSheet(sheet, returnCode: .OK)
-        } catch {
-            self.error.stringValue = error.localizedDescription
-            NSAccessibility.post(element: self.error, notification: .valueChanged)
+    private func updateSite() {
+        siteNote?.stringValue = [draft.source.isBuiltIn ? "内置" : "", draft.source.enabled ? "" : "未启用"]
+            .filter { !$0.isEmpty }.joined(separator: " · ")
+        siteNote?.isHidden = siteNote?.stringValue.isEmpty == true
+        arrow?.state = draft.expanded ? .on : .off
+        arrow?.setAccessibilityLabel("展开或折叠" + draft.title)
+        if let addressField {
+            let hint = HelpField.address.tip(readOnly: draft.source.isBuiltIn)
+            addressField.toolTip = draft.form.address.isEmpty ? hint : draft.form.address + "\n" + hint
         }
     }
 
-    @objc private func cancel() { sheet.sheetParent?.endSheet(sheet, returnCode: .cancel) }
+    private func gridRow(_ views: [NSView], height: CGFloat) {
+        let cells = views.enumerated().map { index, view -> NSView in
+            guard (2...5).contains(index), let label = view as? NSTextField, !label.isEditable else { return view }
+            // Match the text edge inside the bordered number editors, including the label's optical inset.
+            let cell = NSView()
+            label.translatesAutoresizingMaskIntoConstraints = false
+            cell.addSubview(label)
+            NSLayoutConstraint.activate([
+                label.leadingAnchor.constraint(equalTo: cell.leadingAnchor),
+                label.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -6),
+                label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                cell.heightAnchor.constraint(equalTo: label.heightAnchor)
+            ])
+            return cell
+        }
+        let row = grid.addRow(with: cells)
+        row.height = height
+        for (i, width) in Self.widths.enumerated() {
+            if let width { grid.column(at: i).width = width }
+            else {
+                views[i].setContentHuggingPriority(.defaultLow, for: .horizontal)
+                views[i].setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            }
+        }
+    }
+
+    func toggle() {
+        draft.expanded.toggle()
+        structuralChange()
+    }
+
+    private func structuralChange() {
+        rebuild()
+        onChange(true)
+    }
+
+    func rebuild() {
+        while grid.numberOfRows > 0 {
+            let last = grid.numberOfRows - 1
+            let views = (0..<grid.numberOfColumns).compactMap { grid.cell(atColumnIndex: $0, rowIndex: last).contentView }
+            grid.removeRow(at: last)
+            views.forEach { $0.removeFromSuperview() }
+        }
+        fields = fields.filter { $0.key.lane == nil }
+        laneLabels.removeAll()
+        addMenus.removeAll()
+        personalRows.removeAll()
+        if draft.expanded {
+            let columns = ["", "当前强度", "间隔 (秒)", "提醒 (秒)", "截止 (秒)", "并发", "8 小时请求数", "预计流量", ""]
+            let help: [HelpField?] = [nil, .intensity, .interval, .warning, .cutoff, .capacity, .traffic, .traffic, nil]
+            let header = columns.enumerated().map { i, title in
+                let label = text(title, secondary: true)
+                label.font = .systemFont(ofSize: 11, weight: .medium)
+                if (2...7).contains(i) { label.alignment = .right }
+                help[i]?.attach(to: label)
+                return label
+            }
+            gridRow(header, height: 18)
+            for lane in ProbeLane.allCases { laneRow(lane) }
+        }
+        refresh()
+    }
+
+    private func laneRow(_ lane: ProbeLane) {
+        let inputs = draft.form.personal[lane] ?? []
+        let open = draft.openLanes.contains(lane)
+        let arrow = disclosure("管理" + lane.title + "探测强度", open: open) { [weak self] in
+            guard let self else { return }
+            if open { draft.openLanes.remove(lane) } else { draft.openLanes.insert(lane) }
+            structuralChange()
+        }
+        // An empty slot preserves the indentation when there are no personal strengths to expand.
+        let slot = NSView()
+        slot.widthAnchor.constraint(equalToConstant: 15).isActive = true
+        if !inputs.isEmpty {
+            arrow.translatesAutoresizingMaskIntoConstraints = false
+            slot.addSubview(arrow)
+            NSLayoutConstraint.activate([arrow.centerXAnchor.constraint(equalTo: slot.centerXAnchor),
+                                         arrow.centerYAnchor.constraint(equalTo: slot.centerYAnchor),
+                                         slot.heightAnchor.constraint(equalToConstant: 22)])
+        }
+        let name = text(lane.title)
+        name.font = .systemFont(ofSize: 12, weight: .semibold)
+        HelpField.type.attach(to: name, lane: lane)
+        let count = text(inputs.isEmpty ? "" : "\(inputs.count) 项", secondary: true)
+        count.toolTip = "本站的" + lane.title + "个人强度数量"
+        let lead = NSStackView(views: [slot, name, count, NSView()])
+        lead.spacing = 3
+        let labels = (0..<7).map { i in
+            let label = text()
+            if i > 0 { label.alignment = .right }
+            return label
+        }
+        laneLabels[lane] = labels
+        let add = NSPopUpButton(frame: .zero, pullsDown: true)
+        add.addItem(withTitle: "新增强度")
+        add.setAccessibilityLabel(lane.title + "新增强度")
+        add.toolTip = "选择模板，为本站创建" + lane.title + "个人强度。"
+        addMenus[lane] = add
+        gridRow([lead] + labels + [add], height: 26)
+        if open { for input in inputs { personalRow(input, lane: lane) } }
+    }
+
+    private func updateTemplates(for lane: ProbeLane, menu: NSMenu) {
+        let selection = draft.selectedID(lane)
+        let selectionLabel = draft.source[strength: lane].enabled ? "（当前）" : "（已保留）"
+        let personal = draft.form.personal[lane] ?? []
+        let templates = lane.strengths.map(StrengthInput.init) + personal
+        let ordered = templates.filter { $0.id == selection } + templates.filter { $0.id != selection }
+        let choices = ordered.map { template in
+            let name = template.name.isEmpty ? "未命名强度" : template.name
+            return Template(lane: lane, id: template.id, title: name + (template.id == selection ? selectionLabel : ""))
+        }
+        // Pull-down buttons reserve the first item for their permanent title.
+        let existing = menu.items.dropFirst().compactMap { $0.representedObject as? Template }
+        guard existing != choices else { return }
+        for item in menu.items.dropFirst() { menu.removeItem(item) }
+        for choice in choices {
+            let item = menu.addItem(withTitle: choice.title, action: #selector(addFromTemplate(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = choice
+        }
+    }
+
+    private struct Template: Equatable {
+        let lane: ProbeLane
+        let id: String
+        let title: String
+    }
+
+    @objc private func addFromTemplate(_ sender: NSMenuItem) {
+        guard let template = sender.representedObject as? Template else { return }
+        let lane = template.lane
+        let inputs = draft.form.personal[lane] ?? []
+        guard let original = inputs.first(where: { $0.id == template.id })
+                ?? lane.strengths.first(where: { $0.id == template.id }).map(StrengthInput.init) else { return }
+        let names = Set(inputs.map(\.name))
+        var suffix = 1
+        while names.contains("自定义 \(suffix)") { suffix += 1 }
+        let copy = StrengthInput(id: UUID().uuidString, name: "自定义 \(suffix)", numbers: original.numbers)
+        draft.form.personal[lane, default: []].append(copy)
+        draft.openLanes.insert(lane)
+        structuralChange()
+        focus(.personalName(lane, copy.id))
+    }
+
+    func focus(_ key: SiteFormField) {
+        guard let field = fields[key], let window = field.window else { return }
+        field.scrollToVisible(field.bounds.insetBy(dx: -2, dy: -3))
+        window.makeFirstResponder(field)
+        field.selectText(nil)
+    }
+
+    private func personalRow(_ input: StrengthInput, lane: ProbeLane) {
+        let update: ((inout StrengthInput) -> Void) -> Void = { [weak self] change in
+            guard let self, let index = draft.form.personal[lane]?.firstIndex(where: { $0.id == input.id }) else { return }
+            change(&draft.form.personal[lane]![index])
+            changed()
+        }
+        let mark = text("", secondary: true)
+        mark.alignment = .right
+        let name = FormField(input.name, label: lane.title + "个人强度名称", topic: .intensity) { value in update { $0.name = value } }
+        fields[.personalName(lane, input.id)] = name
+        var cells: [NSView] = [mark, name]
+        for (index, topic) in Self.numberTopics.enumerated() {
+            let field = FormField(input.numbers[index], label: lane.title + topic.rawValue, topic: topic) { value in
+                update { $0.numbers[index] = value }
+            }
+            field.alignment = .right
+            fields[.number(lane, input.id, index)] = field
+            cells.append(field)
+        }
+        let count = text()
+        let traffic = text()
+        for field in [count, traffic] {
+            field.alignment = .right
+            HelpField.traffic.attach(to: field)
+        }
+        let remove = FormButton("删除") { [weak self] in
+            guard let self, draft.canRemoveStrength(input.id, lane: lane) else { return }
+            draft.form.personal[lane]?.removeAll { $0.id == input.id }
+            if draft.form.personal[lane]?.isEmpty == true { draft.openLanes.remove(lane) }
+            structuralChange()
+        }
+        personalRows[lane, default: [:]][input.id] = PersonalRow(mark: mark, count: count, traffic: traffic, remove: remove)
+        gridRow(cells + [count, traffic, remove], height: 25)
+    }
+
+    private func changed() { refresh(); onChange(false) }
+
+    func refresh() {
+        updateSite()
+        for lane in ProbeLane.allCases {
+            guard let labels = laneLabels[lane], let menu = addMenus[lane]?.menu else { continue }
+            updateTemplates(for: lane, menu: menu)
+            let selected = draft.source[strength: lane]
+            let id = draft.selectedID(lane)
+            let input = draft.form.personal[lane]?.first { $0.id == id }
+                ?? lane.strengths.first { $0.id == id }.map(StrengthInput.init)
+            let budget = selected.enabled ? draft.selected(lane).map { ProbeBudget(lane: lane, interval: $0.values.interval) } : ProbeBudget()
+            let title = (selected.enabled ? "" : "已停止 · ") + (input?.name ?? "—")
+            let values = [title] + (input?.numbers ?? Array(repeating: "—", count: 4)) +
+                [budget?.requests.formatted() ?? "—", budget?.trafficDisplay ?? "—"]
+            for (field, value) in zip(labels, values) {
+                field.stringValue = value
+                field.textColor = selected.enabled ? .labelColor : .secondaryLabelColor
+            }
+            let topics: [HelpField] = [.intensity] + Self.numberTopics + [.traffic, .traffic]
+            for (label, topic) in zip(labels, topics) {
+                topic.attach(to: label)
+                label.setAccessibilityLabel(lane.title + "当前" + topic.rawValue)
+            }
+            labels[0].toolTip = title + "\n" + HelpField.intensity.tip()
+            labels[5].setAccessibilityLabel(lane.title + "预计 8 小时请求数")
+            labels[6].setAccessibilityLabel(lane.title + "预计 8 小时流量")
+            if selected.enabled && !draft.source.enabled {
+                for label in labels.suffix(2) { label.toolTip = "启用此站点后，连续探测 8 小时的估算。" }
+            }
+            for input in draft.form.personal[lane] ?? [] {
+                guard let row = personalRows[lane]?[input.id] else { continue }
+                let chosen = input.id == selected.selectedID
+                row.mark.stringValue = chosen ? (selected.enabled ? "个人 · 已选" : "个人 · 已保留") : "个人"
+                let budget = (try? input.strength(for: lane)).map { ProbeBudget(lane: lane, interval: $0.values.interval) }
+                row.count.stringValue = budget?.requests.formatted() ?? "—"
+                row.traffic.stringValue = budget?.trafficDisplay ?? "—"
+                row.remove.isEnabled = draft.canRemoveStrength(input.id, lane: lane)
+                row.remove.toolTip = row.remove.isEnabled ? nil : "先在菜单中停止该方式或切换探测强度，再删除。"
+            }
+        }
+    }
+}
+
+private extension StrengthInput {
+    init(id: String, name: String, numbers: [String]) {
+        self.id = id
+        self.name = name
+        self.numbers = numbers
+    }
 }
