@@ -25,6 +25,7 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var probeItem: NSMenuItem!
     private let siteMenuStart = NSMenuItem.separator()
     private let systemSleep = SystemSleepMenu()
+    private let fileTools = FileToolsMenu()
     private var loginItem: NSMenuItem!
     private let service = SMAppService.mainApp
     private let queue = DispatchQueue(label: "netrate.sample", qos: .utility)
@@ -68,6 +69,8 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(siteMenuStart)
         menu.addItem(.separator())
         menu.addItem(systemSleep.item)
+        menu.addItem(.separator())
+        fileTools.add(to: menu)
         menu.addItem(.separator())
         loginItem = menu.addItem(withTitle: "登录时启动", action: #selector(toggleLogin), keyEquivalent: "")
         loginItem.target = self
