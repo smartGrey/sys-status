@@ -186,7 +186,22 @@ final class HoverCard: NSBox {
     private let divider = NSBox()
     private let footer = NSTextField(labelWithString: "")
     private let overflow = NSTextField(labelWithString: "")
-    private var rows: [(dot: NSImageView, name: NSTextField, daily: NSTextField, fresh: NSTextField, rate: NSTextField)] = []
+    private struct Row {
+        let dot: NSImageView
+        let name: NSTextField
+        let daily: NSTextField
+        let fresh: NSTextField
+        let dailyRate: NSTextField
+        let separator: NSTextField
+        let freshRate: NSTextField
+
+        var views: [NSView] { [dot, name, daily, fresh, dailyRate, separator, freshRate] }
+    }
+
+    private var rows: [Row] = []
+    private static let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+    private static let percentWidth = ceil(("100" as NSString).size(withAttributes: [.font: valueFont]).width) + 4
+    private static let slashWidth: CGFloat = 12
 
     init() {
         super.init(frame: .zero)
@@ -219,19 +234,25 @@ final class HoverCard: NSBox {
         let name = NSTextField(labelWithString: "")
         name.font = .systemFont(ofSize: 12, weight: .medium)
         name.lineBreakMode = .byTruncatingTail
-        func valueField() -> NSTextField {
-            let field = NSTextField(labelWithString: "")
-            field.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-            field.alignment = .right
+        func valueField(_ text: String = "", aligned alignment: NSTextAlignment = .right) -> NSTextField {
+            let field = NSTextField(labelWithString: text)
+            field.font = Self.valueFont
+            field.alignment = alignment
+            field.setAccessibilityElement(false)
             return field
         }
-        let daily = valueField(), fresh = valueField(), rate = valueField()
-        for view in [dot, name, daily, fresh, rate] { contentView?.addSubview(view) }
-        rows.append((dot, name, daily, fresh, rate))
+        let separator = valueField("/", aligned: .center)
+        separator.textColor = .secondaryLabelColor
+        let row = Row(dot: dot, name: name, daily: valueField(), fresh: valueField(),
+                      dailyRate: valueField(), separator: separator, freshRate: valueField(aligned: .left))
+        for view in row.views { contentView?.addSubview(view) }
+        rows.append(row)
     }
 
     func update(_ state: ConnectivityState, availableHeight: CGFloat, availableWidth: CGFloat = .greatestFiniteMagnitude) -> NSSize {
-        let rateWidth = ceil(headers[3].intrinsicContentSize.width) + 4
+        let rateGap: CGFloat = 2
+        let rateWidth = max(ceil(headers[3].intrinsicContentSize.width) + 4,
+                            2 * Self.percentWidth + Self.slashWidth + 2 * rateGap)
         let hasTCP = state.rows.contains(where: \.isTCP)
         let freshWidth: CGFloat = hasTCP ? 84 : 61
         let width = min(304 + rateWidth + freshWidth - 61, availableWidth)
@@ -246,6 +267,9 @@ final class HoverCard: NSBox {
         footer.stringValue = state.footer
         divider.frame = NSRect(x: 14, y: 32, width: width - 28, height: 1)
         let rateX = width - 14 - rateWidth
+        let freshRateX = width - 14 - Self.percentWidth
+        let slashX = freshRateX - rateGap - Self.slashWidth
+        let dailyRateX = slashX - rateGap - Self.percentWidth
         // Leave room for a recognizable site name when the visible screen is narrow.
         let latencyWidth = min(61, max(48, floor((rateX - 90) / 2)))
         let freshColumnWidth = latencyWidth + freshWidth - 61
@@ -264,7 +288,7 @@ final class HoverCard: NSBox {
         while rows.count < visible { addRow() }
         while rows.count > visible {
             let row = rows.removeLast()
-            for view in [row.dot, row.name, row.daily, row.fresh, row.rate] { view.removeFromSuperview() }
+            for view in row.views { view.removeFromSuperview() }
         }
         for (index, site) in state.rows.prefix(visible).enumerated() {
             let row = rows[index]
@@ -282,11 +306,13 @@ final class HoverCard: NSBox {
             row.name.setAccessibilityLabel(site.spoken)
             row.daily.frame = NSRect(x: dailyX, y: y, width: latencyWidth, height: 17)
             row.fresh.frame = NSRect(x: freshX, y: y, width: freshColumnWidth, height: 17)
-            row.rate.frame = NSRect(x: rateX, y: y, width: rateWidth, height: 17)
+            row.dailyRate.frame = NSRect(x: dailyRateX, y: y, width: Self.percentWidth, height: 17)
+            row.separator.frame = NSRect(x: slashX, y: y, width: Self.slashWidth, height: 17)
+            row.freshRate.frame = NSRect(x: freshRateX, y: y, width: Self.percentWidth, height: 17)
             row.daily.stringValue = site.text(for: .daily)
             row.fresh.stringValue = site.text(for: .fresh)
-            row.rate.stringValue = site.percentages
-            for field in [row.daily, row.fresh, row.rate] { field.setAccessibilityElement(false) }
+            row.dailyRate.stringValue = site.percentage(for: .daily)
+            row.freshRate.stringValue = site.percentage(for: .fresh)
         }
         return size
     }

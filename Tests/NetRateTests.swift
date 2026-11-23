@@ -891,23 +891,43 @@ final class NetRateTests: XCTestCase {
         XCTAssertTrue(state.summary.contains(row.name + "，复用 132 ms，新建 非预期状态码 403"))
         XCTAssertTrue(state.summary.contains("复用成功率 100%，成功 7 次，完成 7 次，新建成功率 100%，成功 2 次，完成 2 次"))
         let fields = try XCTUnwrap(card.contentView).subviews.compactMap { $0 as? NSTextField }
-        let percentages = try XCTUnwrap(fields.first { $0.stringValue == "100/100" })
-        XCTAssertEqual(percentages.alignment, .right)
-        XCTAssertGreaterThanOrEqual(percentages.frame.width, percentages.intrinsicContentSize.width)
+        let percentages = fields.filter { $0.stringValue == "100" }.sorted { $0.frame.minX < $1.frame.minX }
+        XCTAssertEqual(percentages.count, 2)
+        let dailyRate = try XCTUnwrap(percentages.first)
+        let freshRate = try XCTUnwrap(percentages.last)
+        let slash = try XCTUnwrap(fields.first { $0.stringValue == "/" })
+        XCTAssertEqual(dailyRate.alignment, .right)
+        XCTAssertEqual(freshRate.alignment, .left)
+        XCTAssertGreaterThanOrEqual(dailyRate.frame.width, dailyRate.intrinsicContentSize.width)
+        XCTAssertGreaterThanOrEqual(freshRate.frame.width, freshRate.intrinsicContentSize.width)
+        XCTAssertGreaterThan(slash.frame.width, slash.intrinsicContentSize.width)
+        XCTAssertGreaterThan(slash.frame.minX, dailyRate.frame.maxX)
+        XCTAssertEqual(slash.frame.minX - dailyRate.frame.maxX, freshRate.frame.minX - slash.frame.maxX)
         XCTAssertEqual(card.update(state, availableHeight: 180, availableWidth: 320).width, 320)
         let header = try XCTUnwrap(fields.first { $0.stringValue == "复用/新建请求成功率(%)" })
         XCTAssertEqual(header.maximumNumberOfLines, 1)
         XCTAssertGreaterThanOrEqual(header.frame.width, header.intrinsicContentSize.width)
-        XCTAssertEqual(header.frame.maxX, percentages.frame.maxX)
+        XCTAssertEqual(header.frame.maxX, freshRate.frame.maxX)
         let fresh = try XCTUnwrap(fields.first { $0.stringValue == "新建" })
         XCTAssertEqual(header.frame.minY, fresh.frame.minY)
         XCTAssertGreaterThan(header.frame.minX, fresh.frame.maxX)
         let name = try XCTUnwrap(fields.first { $0.stringValue == row.name })
         XCTAssertEqual(name.accessibilityLabel(), row.spoken)
         XCTAssertGreaterThan(size.width, 402)
-        let empty = ConnectivityState.Row(id: "c", name: row.name, enabled: true)
-        _ = card.update(.init(rows: [empty]), availableHeight: 180, availableWidth: 320)
-        XCTAssertEqual(percentages.stringValue, "—/—")
+        let shorter = ConnectivityState.Row(id: "short", name: "Short", enabled: true,
+                                            freshCount: .init(successes: 97, completed: 100))
+        let zero = ConnectivityState.Row(id: "zero", name: "Zero", enabled: true,
+                                         dailyCount: .init(successes: 0, completed: 1))
+        _ = card.update(.init(rows: [row, shorter, zero]), availableHeight: 185, availableWidth: 320)
+        let rateFields = try XCTUnwrap(card.contentView).subviews.compactMap { $0 as? NSTextField }
+        func column(_ reference: NSTextField) -> [String] {
+            rateFields.filter { $0.frame.minX == reference.frame.minX && $0.frame.height == reference.frame.height }
+                .sorted { $0.frame.minY > $1.frame.minY }
+                .map(\.stringValue)
+        }
+        XCTAssertEqual(column(dailyRate), ["100", "—", "0"])
+        XCTAssertEqual(column(slash), ["/", "/", "/"])
+        XCTAssertEqual(column(freshRate), ["100", "97", "—"])
         XCTAssertEqual(state.color, .red)
         let many = ConnectivityState(rows: Array(repeating: row, count: 15))
         XCTAssertLessThanOrEqual(card.update(many, availableHeight: 185).height, 185)

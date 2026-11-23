@@ -196,9 +196,13 @@ struct ConnectivityState: Equatable {
         var freshCount = SuccessCount()
 
         var percentages: String {
-            let daily = enabled && dailySettings.enabled ? dailyCount.percent : "—"
-            let fresh = enabled && freshSettings.enabled ? freshCount.percent : "—"
-            return "\(daily)/\(fresh)"
+            "\(percentage(for: .daily))/\(percentage(for: .fresh))"
+        }
+
+        func percentage(for lane: ProbeLane) -> String {
+            let settings = lane == .daily ? dailySettings : freshSettings
+            guard enabled, settings.enabled else { return "—" }
+            return (lane == .daily ? dailyCount : freshCount).percent
         }
 
         func text(for lane: ProbeLane) -> String {
