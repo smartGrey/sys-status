@@ -25,6 +25,7 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var probeItem: NSMenuItem!
     private let siteMenuStart = NSMenuItem.separator()
     private let systemSleep = SystemSleepMenu()
+    private let volumeKeys = VolumeKeyMenu()
     private let fileTools = FileToolsMenu()
     private var loginItem: NSMenuItem!
     private let service = SMAppService.mainApp
@@ -69,6 +70,7 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(siteMenuStart)
         menu.addItem(.separator())
         menu.addItem(systemSleep.item)
+        menu.addItem(volumeKeys.item)
         menu.addItem(.separator())
         fileTools.add(to: menu)
         menu.addItem(.separator())
@@ -84,6 +86,7 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
         center.addObserver(self, selector: #selector(startSampling), name: NSWorkspace.didWakeNotification, object: nil)
         center.addObserver(self, selector: #selector(resetHoverPosition),
                            name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        volumeKeys.restore()
         observeNetworkChanges()
         startSampling()
     }
@@ -266,6 +269,7 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func quitApp() { NSApp.terminate(nil) }
 
     func applicationWillTerminate(_ notification: Notification) {
+        volumeKeys.stop()
         if let networkStore { SCDynamicStoreSetDispatchQueue(networkStore, nil) }
         stopSampling()
         NSWorkspace.shared.notificationCenter.removeObserver(self)
