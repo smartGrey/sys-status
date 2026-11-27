@@ -2,7 +2,7 @@ import Foundation
 import Security
 
 @objc protocol SleepServiceProtocol {
-    func setSleepDisabled(_ disabled: Bool, reply: @escaping (NSError?) -> Void)
+    func setSleepDisabled(_ disabled: Bool, reply: @escaping @Sendable (NSError?) -> Void)
 }
 
 enum SleepService {

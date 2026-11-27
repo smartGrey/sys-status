@@ -23,7 +23,14 @@ enum SystemSleep {
         guard let requirement = SleepService.signingRequirement(for: SleepService.label) else {
             throw SleepService.error("请使用带开发者签名的状态栏扩展版本。")
         }
-        try prepareService()
+        let fingerprint = try SleepRegistration.fingerprint(in: .main, requirement: requirement)
+        do {
+            try await SleepRegistration.prepare(SMAppService.daemon(plistName: SleepService.label + ".plist"),
+                                                fingerprint: fingerprint)
+        } catch is SleepRegistration.NeedsApproval {
+            showApprovalInstructions()
+            throw CancellationError()
+        }
 
         let context = LAContext()
         let reason = disabled ? "禁用 Mac 的系统睡眠" : "恢复 Mac 的系统睡眠"
@@ -36,67 +43,24 @@ enum SystemSleep {
             throw CancellationError()
         }
 
-        let connection = NSXPCConnection(machServiceName: SleepService.label, options: .privileged)
-        connection.remoteObjectInterface = NSXPCInterface(with: SleepServiceProtocol.self)
-        connection.setCodeSigningRequirement(requirement)
-        connection.resume()
-        let deadline = Task {
-            try await Task.sleep(for: .seconds(10))
-            connection.invalidate()
-        }
-        defer {
-            deadline.cancel()
-            connection.invalidate()
-        }
-        try await withCheckedThrowingContinuation { (result: CheckedContinuation<Void, Error>) in
-            let proxy = connection.remoteObjectProxyWithErrorHandler { _ in
-                result.resume(throwing: SleepService.error("未能连接睡眠控制服务。请确认系统设置中的后台服务已允许，再试一次。"))
-            }
-            guard let service = proxy as? SleepServiceProtocol else {
-                result.resume(throwing: SleepService.error("无法使用睡眠控制服务。"))
-                return
-            }
-            service.setSleepDisabled(disabled) { error in
-                if let error { result.resume(throwing: error) }
-                else { result.resume() }
-            }
-        }
+        try await SleepConnection.write(disabled, requirement: requirement)
     }
 
     @MainActor
-    private static func prepareService() throws {
-        let service = SMAppService.daemon(plistName: SleepService.label + ".plist")
-        switch service.status {
-        case .enabled:
-            return
-        case .notRegistered, .notFound, .requiresApproval:
-            let alert = NSAlert()
-            alert.messageText = "允许状态栏扩展控制系统睡眠"
-            alert.informativeText = "首次使用需要管理员在「系统设置 → 通用 → 登录项与扩展」中允许状态栏扩展的后台服务。批准后，再点一次菜单里的「禁用系统睡眠」。"
-            alert.addButton(withTitle: "打开系统设置")
-            alert.addButton(withTitle: "取消").keyEquivalent = "\u{1b}"
-            NSApp.activate()
-            guard alert.runModal() == .alertFirstButtonReturn else { throw CancellationError() }
-            // The first status query can return notFound until the system has a registration record.
-            let status = service.status
-            if status == .notRegistered || status == .notFound {
-                do {
-                    try service.register()
-                } catch let error as NSError {
-                    let awaitingApproval = error.domain == SMAppServiceErrorDomain
-                        && error.code == Int(kSMErrorLaunchDeniedByUser)
-                    guard awaitingApproval || service.status == .requiresApproval || service.status == .enabled else {
-                        throw error
-                    }
-                }
-            }
-            if service.status == .enabled { return }
-            SMAppService.openSystemSettingsLoginItems()
-            throw CancellationError()
-        default:
-            throw SleepService.error("找不到睡眠控制服务。请重新打开完整的状态栏扩展.app 后重试。")
-        }
+    private static func showApprovalInstructions() {
+        let alert = NSAlert()
+        alert.messageText = "允许状态栏扩展控制系统睡眠"
+        alert.informativeText = "请在「系统设置 → 通用 → 登录项与扩展」中允许睡眠助手。批准后，再点一次菜单里的「禁用系统睡眠」。"
+        alert.addButton(withTitle: "打开系统设置")
+        alert.addButton(withTitle: "取消").keyEquivalent = "\u{1b}"
+        NSApp.activate()
+        if alert.runModal() == .alertFirstButtonReturn { SMAppService.openSystemSettingsLoginItems() }
     }
+}
+
+struct SleepNotice {
+    let title: String
+    let detail: String
 }
 
 @MainActor
@@ -105,16 +69,17 @@ final class SystemSleepMenu {
     private let read: () -> Bool?
     private let write: (Bool) async throws -> Void
     private let waitForPowerChange: () async throws -> Void
-    private let report: (String) -> Void
+    private let report: (SleepNotice) -> Void
     private var switching = false
 
     init(read: @escaping () -> Bool? = SystemSleep.isDisabled,
          write: @escaping (Bool) async throws -> Void = SystemSleep.setDisabled,
          waitForPowerChange: @escaping () async throws -> Void = { try await Task.sleep(for: .milliseconds(100)) },
-         report: @escaping (String) -> Void = { message in
+         report: @escaping (SleepNotice) -> Void = { notice in
              let alert = NSAlert()
-             alert.messageText = "未能切换系统睡眠"
-             alert.informativeText = message
+             alert.messageText = notice.title
+             alert.informativeText = notice.detail
+             NSApp.activate()
              alert.runModal()
          }) {
         self.read = read
@@ -129,7 +94,10 @@ final class SystemSleepMenu {
 
     func refresh() {
         guard !switching else { return }
-        let disabled = read()
+        display(read())
+    }
+
+    private func display(_ disabled: Bool?) {
         item.title = disabled == nil ? "禁用系统睡眠（状态待确认）" : "禁用系统睡眠"
         item.state = disabled.map { $0 ? .on : .off } ?? .mixed
         item.isEnabled = disabled != nil
@@ -145,25 +113,40 @@ final class SystemSleepMenu {
         item.title = "禁用系统睡眠（正在切换…）"
         item.isEnabled = false
         Task {
-            var failure: String?
+            var communicationError: SleepCommunicationError?
             do {
                 try await write(requested)
-                // powerd applies a successful pmset write asynchronously.
-                for _ in 0..<10 {
-                    if read() == requested { break }
-                    try await waitForPowerChange()
-                }
-                if let actual = read(), actual != requested {
-                    failure = "系统当前仍\(actual ? "禁用" : "允许")睡眠。"
-                }
-            } catch is CancellationError {
-                // Dismissing the system authorization sheet is a normal user action.
+            } catch let error as SleepCommunicationError {
+                communicationError = error
             } catch {
-                failure = error.localizedDescription
+                switching = false
+                refresh()
+                if !(error is CancellationError) {
+                    report(SleepNotice(title: "未能切换系统睡眠", detail: error.localizedDescription))
+                }
+                return
+            }
+
+            // Both a successful reply and a lost reply can precede powerd applying the write.
+            var actual = read()
+            for _ in 0..<10 {
+                if actual == requested { break }
+                do { try await waitForPowerChange() } catch { break }
+                actual = read()
             }
             switching = false
-            refresh()
-            if let failure { report(failure) }
+            display(actual)
+            guard let actual else {
+                report(SleepNotice(title: "系统睡眠状态待确认", detail: "暂时无法读取系统睡眠状态。请稍后重新打开菜单查看。"))
+                return
+            }
+            if actual != requested {
+                let state = actual ? "禁用" : "允许"
+                report(SleepNotice(title: "未能切换系统睡眠", detail: "系统当前仍\(state)睡眠。"))
+            } else if let communicationError {
+                report(SleepNotice(title: actual ? "系统睡眠已禁用" : "系统睡眠已恢复",
+                                   detail: "已从系统确认设置生效，无需重试。睡眠助手通信异常。\n\(communicationError.localizedDescription)"))
+            }
         }
     }
 }

@@ -14,7 +14,7 @@ final class SystemSleepTests: XCTestCase {
         let control = SystemSleepMenu(read: { actual }, write: { requested in
             requests.append(requested)
             try await withCheckedThrowingContinuation { authorize = $0 }
-        }, waitForPowerChange: { await withCheckedContinuation { powerChange = $0 } }, report: { failures.append($0) })
+        }, waitForPowerChange: { await withCheckedContinuation { powerChange = $0 } }, report: { failures.append($0.title) })
         XCTAssertEqual(control.item.state, .off)
         control.toggle()
         control.refresh()
@@ -71,7 +71,7 @@ final class SystemSleepTests: XCTestCase {
         var commandFails = true
         let control = SystemSleepMenu(read: { system }, write: { _ in
             if commandFails { throw CocoaError(.fileWriteNoPermission) }
-        }, waitForPowerChange: {}, report: { reports.append($0) })
+        }, waitForPowerChange: {}, report: { reports.append($0.title) })
         control.toggle()
         try await waitUntil { reports.count == 1 }
         XCTAssertEqual(control.item.state, .on)
@@ -90,6 +90,43 @@ final class SystemSleepTests: XCTestCase {
             var requirement: SecRequirement?
             XCTAssertEqual(SecRequirementCreateWithString(source as CFString, [], &requirement), errSecSuccess)
             XCTAssertNotNil(requirement)
+        }
+    }
+
+    @MainActor
+    func testLostReplyReportsTheVerifiedStateInBothDirectionsWithoutRetrying() async throws {
+        for target in [true, false] {
+            var system = !target
+            var writes = 0
+            var notices: [SleepNotice] = []
+            let control = SystemSleepMenu(read: { system }, write: { value in
+                XCTAssertEqual(value, target)
+                writes += 1
+                throw SleepCommunicationError("连接中断")
+            }, waitForPowerChange: { system = target }, report: { notices.append($0) })
+            control.toggle()
+            try await waitUntil { !notices.isEmpty }
+            XCTAssertEqual(writes, 1)
+            XCTAssertEqual(control.item.state, target ? .on : .off)
+            XCTAssertEqual(notices.first?.title, target ? "系统睡眠已禁用" : "系统睡眠已恢复")
+            XCTAssertTrue(notices[0].detail.contains("无需重试"))
+        }
+    }
+
+    @MainActor
+    func testLostReplyWithUnchangedOrUnreadableState() async throws {
+        for afterWrite in [false, nil] as [Bool?] {
+            var system: Bool? = false
+            var notices: [SleepNotice] = []
+            let control = SystemSleepMenu(read: { system }, write: { _ in
+                system = afterWrite
+                throw SleepCommunicationError("连接中断")
+            }, waitForPowerChange: {}, report: { notices.append($0) })
+            control.toggle()
+            try await waitUntil { !notices.isEmpty }
+            XCTAssertEqual(control.item.state, afterWrite == nil ? .mixed : .off)
+            XCTAssertEqual(notices.first?.title, afterWrite == nil ? "系统睡眠状态待确认" : "未能切换系统睡眠")
+            XCTAssertEqual(control.item.isEnabled, afterWrite != nil)
         }
     }
 }

@@ -10,6 +10,7 @@
 		0AD7E26E37F249B4AB8171E9 /* com.smartgrey.netrate.sleep-helper.plist in Embed LaunchDaemon Plist */ = {isa = PBXBuildFile; fileRef = 6BA2153A5B624B7F90099C2C /* com.smartgrey.netrate.sleep-helper.plist */; };
 		17775DEB9C0D4BEDB6D260E8 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 340520DCC20949AB91B836CB /* main.swift */; };
 		57BB9C86FC554657B0B3C9EA /* SleepService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B48DE956E61C4DFE9CAEBCD8 /* SleepService.swift */; };
+		679DC20E8AA748428F07269F /* SleepHelperLifetime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89E68A8D924043CBA8D9F428 /* SleepHelperLifetime.swift */; };
 		9B5810EFC61D2785D58719B7 /* libStatusBarCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = E23EF4DFD8458EBA92BF9064 /* libStatusBarCore.a */; };
 		A05220D394A547B49E59AD93 /* NetRateSleepHelper in Embed Sleep Helper */ = {isa = PBXBuildFile; fileRef = CBC93892ED134FFEB454AED9 /* NetRateSleepHelper */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		C9ADC522A1A91929C1CD0D26 /* libStatusBarCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = E23EF4DFD8458EBA92BF9064 /* libStatusBarCore.a */; };
@@ -72,6 +73,7 @@
 		6BA2153A5B624B7F90099C2C /* com.smartgrey.netrate.sleep-helper.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "com.smartgrey.netrate.sleep-helper.plist"; sourceTree = "<group>"; };
 		7E7AC4FAA6ABCC98B99924AB /* Full.xctestplan */ = {isa = PBXFileReference; includeInIndex = 1; path = Full.xctestplan; sourceTree = "<group>"; };
 		B48DE956E61C4DFE9CAEBCD8 /* SleepService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SleepService.swift; path = Sources/SystemSleep/SleepService.swift; sourceTree = SOURCE_ROOT; };
+		89E68A8D924043CBA8D9F428 /* SleepHelperLifetime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SleepHelperLifetime.swift; path = Sources/SystemSleep/SleepHelperLifetime.swift; sourceTree = SOURCE_ROOT; };
 		CBC93892ED134FFEB454AED9 /* NetRateSleepHelper */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; path = NetRateSleepHelper; sourceTree = BUILT_PRODUCTS_DIR; };
 		E23EF4DFD8458EBA92BF9064 /* libStatusBarCore.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libStatusBarCore.a; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -158,6 +160,7 @@
 				340520DCC20949AB91B836CB /* main.swift */,
 				6BA2153A5B624B7F90099C2C /* com.smartgrey.netrate.sleep-helper.plist */,
 				B48DE956E61C4DFE9CAEBCD8 /* SleepService.swift */,
+				89E68A8D924043CBA8D9F428 /* SleepHelperLifetime.swift */,
 			);
 			path = SleepHelper;
 			sourceTree = "<group>";
@@ -330,6 +333,7 @@
 			files = (
 				17775DEB9C0D4BEDB6D260E8 /* main.swift in Sources */,
 				57BB9C86FC554657B0B3C9EA /* SleepService.swift in Sources */,
+				679DC20E8AA748428F07269F /* SleepHelperLifetime.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

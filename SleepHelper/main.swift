@@ -4,10 +4,13 @@ import SystemConfiguration
 
 private final class SleepDaemon: NSObject, NSXPCListenerDelegate {
     private let writeLock = NSLock()
+    let lifetime = SleepHelperLifetime { exit(EXIT_SUCCESS) }
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
         let caller = connection.effectiveUserIdentifier
         guard Self.isActiveAdministrator(caller) else { return false }
+        lifetime.beginActivity()
+        connection.invalidationHandler = { [lifetime] in lifetime.endActivity() }
         connection.exportedInterface = NSXPCInterface(with: SleepServiceProtocol.self)
         connection.exportedObject = SleepRequest(caller: caller, daemon: self)
         connection.resume()
@@ -60,7 +63,10 @@ private final class SleepRequest: NSObject, SleepServiceProtocol {
         self.daemon = daemon
     }
 
-    func setSleepDisabled(_ disabled: Bool, reply: @escaping (NSError?) -> Void) {
+    func setSleepDisabled(_ disabled: Bool, reply: @escaping @Sendable (NSError?) -> Void) {
+        // The client can disconnect while pmset is still running.
+        daemon.lifetime.beginActivity()
+        defer { daemon.lifetime.endActivity() }
         reply(daemon.setSleepDisabled(disabled, caller: caller))
     }
 }
