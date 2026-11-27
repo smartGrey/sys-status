@@ -1,3 +1,4 @@
+@testable import StatusBarCore
 import AppKit
 import XCTest
 
@@ -96,5 +97,33 @@ final class HearingIntegrationTests: XCTestCase {
         entry.updateHearing(nil)
         XCTAssertFalse(entry.isSplit)
         XCTAssertEqual(entry.item.length, base)
+    }
+}
+
+extension HearingIntegrationTests {
+    func testDropdownAnchoringAndClosingCancelsShortcutRecording() async throws {
+        let app = NSApplication.shared
+        let screen = try XCTUnwrap(NSScreen.screens.last)
+        let store = HearingStore(url: AppDataFile.hearing.url(in: try temporaryDirectory()))
+        let shortcuts = HearingShortcutController(store: store)
+        let model = HearingModel(store: store, shortcuts: shortcuts, authorization: { .denied })
+        let controller = HearingPanelController(model: model)
+        defer { controller.close() }
+        let visible = screen.visibleFrame
+        let anchor = CGRect(x: visible.midX, y: visible.maxY, width: 30, height: 22)
+        var visibility: [Bool] = []
+        controller.onVisibilityChange = { visibility.append($0) }
+        controller.show(under: anchor, on: screen)
+        let panel = try XCTUnwrap(app.windows.first { $0.isVisible && $0.title == "监听环境音" })
+        XCTAssertEqual(panel.frame.maxY, StatusPanelGeometry.top(under: anchor, within: visible), accuracy: 1)
+        let moved = anchor.offsetBy(dx: 40, dy: 0)
+        controller.trackAnchor { _ in moved }
+        XCTAssertEqual(panel.frame.maxX, moved.maxX, accuracy: 1)
+        shortcuts.beginRecording()
+        controller.close()
+        XCTAssertFalse(shortcuts.isRecording)
+        XCTAssertFalse(controller.isVisible)
+        XCTAssertEqual(visibility, [true, false])
+        await model.shutdown().value
     }
 }

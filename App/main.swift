@@ -1,0 +1,3 @@
+import StatusBarCore
+
+StatusBarApplication.run()

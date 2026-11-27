@@ -1,582 +1,590 @@
 // !$*UTF8*$!
 {
-	archiveVersion = "1";
+	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = "56";
+	objectVersion = 77;
 	objects = {
-		70DC7608295B413AB47DED00 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StatusMenuToggleItem.swift; path = NetRate/StatusMenuToggleItem.swift; sourceTree = "<group>"; };
-		70DC7608295B413AB47DED01 = {isa = PBXBuildFile; fileRef = 70DC7608295B413AB47DED00; };
-		70DC7608295B413AB47DED02 = {isa = PBXBuildFile; fileRef = 70DC7608295B413AB47DED00; };
-		25650C557F6A6E836A9F5A37 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioBackend.swift; sourceTree = "<group>"; };
-		FC791766114FAEFA3E82E72C = {isa = PBXBuildFile; fileRef = 25650C557F6A6E836A9F5A37; };
-		451F4F3FC9EFC5456E94AD1C = {isa = PBXBuildFile; fileRef = 25650C557F6A6E836A9F5A37; };
-		B272FF291026F1FC8531238F = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = DSP.hpp; sourceTree = "<group>"; };
-		887AB593BDFDF1D7CBECDD86 = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = Environment.hpp; sourceTree = "<group>"; };
-		AFDCCBC0ABC43D9CCC136167 = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = HearingAudio.cpp; sourceTree = "<group>"; };
-		7F137332D3636771156EEA68 = {isa = PBXBuildFile; fileRef = AFDCCBC0ABC43D9CCC136167; };
-		F15597D6144E11839B805C4A = {isa = PBXBuildFile; fileRef = AFDCCBC0ABC43D9CCC136167; };
-		3E2BCDF171CB99926A94006E = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HearingAudio.h; sourceTree = "<group>"; };
-		B661A6C6BA317624F93D20B5 = {isa = PBXGroup; children = (B272FF291026F1FC8531238F, 887AB593BDFDF1D7CBECDD86, AFDCCBC0ABC43D9CCC136167, 3E2BCDF171CB99926A94006E); name = AudioCore; path = AudioCore; sourceTree = "<group>"; };
-		BBFBA8C92A4FF050F26F404E = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceRegistry.swift; sourceTree = "<group>"; };
-		F78DFBB23C761AC6365C074E = {isa = PBXBuildFile; fileRef = BBFBA8C92A4FF050F26F404E; };
-		49F9A71F741B7B2D92B90430 = {isa = PBXBuildFile; fileRef = BBFBA8C92A4FF050F26F404E; };
-		6615B341DE813E0C8CF0928A = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Domain.swift; sourceTree = "<group>"; };
-		1B56E723BE4D30E6135975EB = {isa = PBXBuildFile; fileRef = 6615B341DE813E0C8CF0928A; };
-		834E641BCC4C10E0F96A6FFA = {isa = PBXBuildFile; fileRef = 6615B341DE813E0C8CF0928A; };
-		30706B9A78197613E4F96E7B = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HearingController.swift; sourceTree = "<group>"; };
-		74E56740E3C8180711E4A903 = {isa = PBXBuildFile; fileRef = 30706B9A78197613E4F96E7B; };
-		D9DCF34AC55696A073146A70 = {isa = PBXBuildFile; fileRef = 30706B9A78197613E4F96E7B; };
-		584B7D3758B4BF062D0F8977 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HearingModel.swift; sourceTree = "<group>"; };
-		1DEEEA1E0DDD80E5E367B237 = {isa = PBXBuildFile; fileRef = 584B7D3758B4BF062D0F8977; };
-		56EA2B746B7EF9BE07F219F5 = {isa = PBXBuildFile; fileRef = 584B7D3758B4BF062D0F8977; };
-		53F2449C0074AE9C488752E5 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HearingPanelController.swift; sourceTree = "<group>"; };
-		2FEC11BE4D61044859AF2AEC = {isa = PBXBuildFile; fileRef = 53F2449C0074AE9C488752E5; };
-		B268F5E18C59652F7E74011F = {isa = PBXBuildFile; fileRef = 53F2449C0074AE9C488752E5; };
-		921297485C71F8EA4F055A8D = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HearingPanelView.swift; sourceTree = "<group>"; };
-		B4EB5081AC775496DE9D8A44 = {isa = PBXBuildFile; fileRef = 921297485C71F8EA4F055A8D; };
-		20C053B69EE48F684352F18B = {isa = PBXBuildFile; fileRef = 921297485C71F8EA4F055A8D; };
-		3E6605FFBE2BC998815AB573 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HearingStore.swift; sourceTree = "<group>"; };
-		4F1B175123DDA76DF6C22D8F = {isa = PBXBuildFile; fileRef = 3E6605FFBE2BC998815AB573; };
-		FDA60932CAD8369847BBC672 = {isa = PBXBuildFile; fileRef = 3E6605FFBE2BC998815AB573; };
-		52E614F46103675CA7B55364 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Presentation.swift; sourceTree = "<group>"; };
-		95A3718824D2F0476D754B88 = {isa = PBXBuildFile; fileRef = 52E614F46103675CA7B55364; };
-		FF043829BC8401507A47F01D = {isa = PBXBuildFile; fileRef = 52E614F46103675CA7B55364; };
-		5A25789385AAC69287F57908 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shortcut.swift; sourceTree = "<group>"; };
-		5FC850DC56F887641A2FEBBD = {isa = PBXBuildFile; fileRef = 5A25789385AAC69287F57908; };
-		6FD1587C17A587E0744C54B7 = {isa = PBXBuildFile; fileRef = 5A25789385AAC69287F57908; };
-		512C50AF992E00F113127CE0 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutView.swift; sourceTree = "<group>"; };
-		097CDC0756130F0322C30D43 = {isa = PBXBuildFile; fileRef = 512C50AF992E00F113127CE0; };
-		99303C2B408758481F421A11 = {isa = PBXBuildFile; fileRef = 512C50AF992E00F113127CE0; };
-		D37483069955730330FA251D = {isa = PBXGroup; children = (25650C557F6A6E836A9F5A37, B661A6C6BA317624F93D20B5, BBFBA8C92A4FF050F26F404E, 6615B341DE813E0C8CF0928A, 30706B9A78197613E4F96E7B, 584B7D3758B4BF062D0F8977, 53F2449C0074AE9C488752E5, 921297485C71F8EA4F055A8D, 3E6605FFBE2BC998815AB573, 52E614F46103675CA7B55364, 5A25789385AAC69287F57908, 512C50AF992E00F113127CE0); name = Hearing; path = NetRate/Hearing; sourceTree = "<group>"; };
-		CBA3B4D62F7341FBEABCCD45 = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = AudioCoreTests.mm; sourceTree = "<group>"; };
-		AA9891218AE4ABB75E7EEB02 = {isa = PBXBuildFile; fileRef = CBA3B4D62F7341FBEABCCD45; };
-		729B93C57737ECA466278F28 = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = EnvironmentSoak.cpp; sourceTree = "<group>"; };
-		AAEEBD075763DE0BB9E28D21 = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = EnvironmentTests.mm; sourceTree = "<group>"; };
-		3BA95E71028EE56CA3441F35 = {isa = PBXBuildFile; fileRef = AAEEBD075763DE0BB9E28D21; };
-		F85BF7A4A78E218DEBBE6CFB = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HearingIntegrationTests.swift; sourceTree = "<group>"; };
-		DA95D289C44A3401686301A4 = {isa = PBXBuildFile; fileRef = F85BF7A4A78E218DEBBE6CFB; };
-		C67F80FEBADFF7FE89E97B7B = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelGeometryTests.swift; sourceTree = "<group>"; };
-		6B27ED30ACFC42E0FFB24632 = {isa = PBXBuildFile; fileRef = C67F80FEBADFF7FE89E97B7B; };
-		E756F7FC6696DE6A37065839 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PolicyTests.swift; sourceTree = "<group>"; };
-		96F5FF86139CB3E3365A1D61 = {isa = PBXBuildFile; fileRef = E756F7FC6696DE6A37065839; };
-		A892D5D3305EF3F226794A20 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresentationTests.swift; sourceTree = "<group>"; };
-		A0EC010CD21D4036753A13F3 = {isa = PBXBuildFile; fileRef = A892D5D3305EF3F226794A20; };
-		2AB02EFFDA3625C601877B31 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutTests.swift; sourceTree = "<group>"; };
-		F485DD02CC684632D1008C05 = {isa = PBXBuildFile; fileRef = 2AB02EFFDA3625C601877B31; };
-		1C24ECB7D63D2B2604E794CB = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = Soak.cpp; sourceTree = "<group>"; };
-		B5BC5CAA1CD719B43E26B537 = {isa = PBXGroup; children = (CBA3B4D62F7341FBEABCCD45, 729B93C57737ECA466278F28, AAEEBD075763DE0BB9E28D21, F85BF7A4A78E218DEBBE6CFB, C67F80FEBADFF7FE89E97B7B, E756F7FC6696DE6A37065839, A892D5D3305EF3F226794A20, 2AB02EFFDA3625C601877B31, 1C24ECB7D63D2B2604E794CB); name = Hearing; path = Tests/Hearing; sourceTree = "<group>"; };
-		3B56C75B7A24FC5085867FA8 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StatusPanelGeometry.swift; path = NetRate/StatusPanelGeometry.swift; sourceTree = "<group>"; };
-		2F96835E9796A1688314B63C = {isa = PBXBuildFile; fileRef = 3B56C75B7A24FC5085867FA8; };
-		1668EB7B1AC53E93864C41E8 = {isa = PBXBuildFile; fileRef = 3B56C75B7A24FC5085867FA8; };
-		8594096C7E6591BA8151874A = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = NetRate-Bridging-Header.h; path = NetRate/NetRate-Bridging-Header.h; sourceTree = "<group>"; };
-		0E69F0B89C29CFB29DF46019 = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; name = NetRate.entitlements; path = NetRate/NetRate.entitlements; sourceTree = "<group>"; };
-		A6CA34F92D8842699F0871FC = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StopwatchTests.swift; path = Tests/StopwatchTests.swift; sourceTree = "<group>"; };
-		441CCD7A0CF042EDA9828087 = {isa = PBXBuildFile; fileRef = A6CA34F92D8842699F0871FC; };
-		DDF664AD2C2048D3A2E7E620 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StatusEntry.swift; path = NetRate/StatusEntry.swift; sourceTree = "<group>"; };
-		42C0A9D62AE4479387050F0D = {isa = PBXBuildFile; fileRef = DDF664AD2C2048D3A2E7E620; };
-		E649008820D843FC8109C924 = {isa = PBXBuildFile; fileRef = DDF664AD2C2048D3A2E7E620; };
-		D0110114300141A9B2699FA5 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StopwatchState.swift; path = StopwatchState.swift; sourceTree = "<group>"; };
-		B2D425EF8A7E46EDB78D98FA = {isa = PBXBuildFile; fileRef = D0110114300141A9B2699FA5; };
-		235BC5B01CC04A12993B195E = {isa = PBXBuildFile; fileRef = D0110114300141A9B2699FA5; };
-		732C794B940B459D99FD0500 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StopwatchHotKeys.swift; path = StopwatchHotKeys.swift; sourceTree = "<group>"; };
-		D5AFBE12358E4C6F87DD7A9E = {isa = PBXBuildFile; fileRef = 732C794B940B459D99FD0500; };
-		FD268DECDC3A4577824C1418 = {isa = PBXBuildFile; fileRef = 732C794B940B459D99FD0500; };
-		3EBA1399421A4C52A19178EE = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StopwatchController.swift; path = StopwatchController.swift; sourceTree = "<group>"; };
-		CF9BE9CE0D674B6EB0A57D42 = {isa = PBXBuildFile; fileRef = 3EBA1399421A4C52A19178EE; };
-		C091E62B0A7C44769030D70E = {isa = PBXBuildFile; fileRef = 3EBA1399421A4C52A19178EE; };
-		19F23C16C3774668B3E0B691 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StopwatchPanel.swift; path = StopwatchPanel.swift; sourceTree = "<group>"; };
-		1E54772446F44835B4744EA0 = {isa = PBXBuildFile; fileRef = 19F23C16C3774668B3E0B691; };
-		25EAB7452B9B4BA184393E3B = {isa = PBXBuildFile; fileRef = 19F23C16C3774668B3E0B691; };
-		FBCC5A3CDBB94783A7C2564F = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StopwatchStatusFace.swift; path = StopwatchStatusFace.swift; sourceTree = "<group>"; };
-		1C19F6C6990C4F358B65F0C5 = {isa = PBXBuildFile; fileRef = FBCC5A3CDBB94783A7C2564F; };
-		4C37A5E5FE5F4AB2BA5CC8C8 = {isa = PBXBuildFile; fileRef = FBCC5A3CDBB94783A7C2564F; };
-		EF7C6B1C26F24EF2AB1C2BED = {isa = PBXGroup; children = (D0110114300141A9B2699FA5, 732C794B940B459D99FD0500, 3EBA1399421A4C52A19178EE, 19F23C16C3774668B3E0B691, FBCC5A3CDBB94783A7C2564F); path = NetRate/Stopwatch; name = Stopwatch; sourceTree = "<group>"; };
-		AD83A3BE4A5B4C118DA07006 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VolumeKeyTests.swift; path = Tests/VolumeKeyTests.swift; sourceTree = "<group>"; };
-		3FBD9914DAC8482EAC1B07F7 = {isa = PBXBuildFile; fileRef = AD83A3BE4A5B4C118DA07006; };
-		3FD28CE991D94EA3B4C92B38 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VolumeEventFilter.swift; path = NetRate/VolumeEventFilter.swift; sourceTree = "<group>"; };
-		10D4C86653694E58AC519E5E = {isa = PBXBuildFile; fileRef = 3FD28CE991D94EA3B4C92B38; };
-		4F57BC633A014EAA8BCF6987 = {isa = PBXBuildFile; fileRef = 3FD28CE991D94EA3B4C92B38; };
-		9C78819E863644AE9905A885 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VolumeKeySession.swift; path = NetRate/VolumeKeySession.swift; sourceTree = "<group>"; };
-		9E60AF98CF2D49CAB14C577D = {isa = PBXBuildFile; fileRef = 9C78819E863644AE9905A885; };
-		E0A2C59343E447318E7D5FB7 = {isa = PBXBuildFile; fileRef = 9C78819E863644AE9905A885; };
-		8ACCC69A193B4763AE2F5297 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VolumeKeyMenu.swift; path = NetRate/VolumeKeyMenu.swift; sourceTree = "<group>"; };
-		A66AD10B3B18422BBA1BFF36 = {isa = PBXBuildFile; fileRef = 8ACCC69A193B4763AE2F5297; };
-		AFCCB636B0CF4EB1A2C8A646 = {isa = PBXBuildFile; fileRef = 8ACCC69A193B4763AE2F5297; };
-		A2C0C6191AF648D78C6B56B1 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FileToolResultPanel.swift; path = NetRate/FileToolResultPanel.swift; sourceTree = "<group>"; };
-		0661F73604BB408CBA446236 = {isa = PBXBuildFile; fileRef = A2C0C6191AF648D78C6B56B1; };
-		BC4DCD4995EB4C2EBC769AAA = {isa = PBXBuildFile; fileRef = A2C0C6191AF648D78C6B56B1; };
-		003DCB9425604F3EAE371750 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FileToolTests.swift; path = Tests/FileToolTests.swift; sourceTree = "<group>"; };
-		F142CFBDFAC44DC383AA28BB = {isa = PBXBuildFile; fileRef = 003DCB9425604F3EAE371750; };
-		00926FB22D5F4B7FA490A0A0 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FileToolsMenu.swift; path = NetRate/FileToolsMenu.swift; sourceTree = "<group>"; };
-		1072577E5F9F4D2EBC2C847C = {isa = PBXBuildFile; fileRef = 00926FB22D5F4B7FA490A0A0; };
-		5D0BFFDC2EFE4076B7754AC3 = {isa = PBXBuildFile; fileRef = 00926FB22D5F4B7FA490A0A0; };
-		4BAED50EA99B45CEB71A2584 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ProjectLineCount.swift; path = NetRate/ProjectLineCount.swift; sourceTree = "<group>"; };
-		21DD285077B74754AA531752 = {isa = PBXBuildFile; fileRef = 4BAED50EA99B45CEB71A2584; };
-		304AD7A7AD364FC7A53035FF = {isa = PBXBuildFile; fileRef = 4BAED50EA99B45CEB71A2584; };
-		78E6628AE5B74FFFB30C28AD = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TextLines.swift; path = NetRate/TextLines.swift; sourceTree = "<group>"; };
-		4571A8307927468BB62083E8 = {isa = PBXBuildFile; fileRef = 78E6628AE5B74FFFB30C28AD; };
-		9158876C8F0F4839B669404A = {isa = PBXBuildFile; fileRef = 78E6628AE5B74FFFB30C28AD; };
-		0ABE8DA5DDDA4FEC801E2028 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DirectoryFiles.swift; path = NetRate/DirectoryFiles.swift; sourceTree = "<group>"; };
-		866C58C760224D2D8ECCB6AB = {isa = PBXBuildFile; fileRef = 0ABE8DA5DDDA4FEC801E2028; };
-		22E603485F6843C892EF6344 = {isa = PBXBuildFile; fileRef = 0ABE8DA5DDDA4FEC801E2028; };
-		B48DE956E61C4DFE9CAEBCD8 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetRate/SleepService.swift; name = SleepService.swift; sourceTree = "<group>"; };
-		340520DCC20949AB91B836CB = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepHelper/main.swift; name = "SleepHelper/main.swift"; sourceTree = "<group>"; };
-		6BA2153A5B624B7F90099C2C = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = SleepHelper/com.smartgrey.netrate.sleep-helper.plist; sourceTree = "<group>"; };
-		80635C538FFC4ABF9B1E5042 = {isa = PBXBuildFile; fileRef = B48DE956E61C4DFE9CAEBCD8; };
-		4390A2D18C8545E6BA9EC980 = {isa = PBXBuildFile; fileRef = B48DE956E61C4DFE9CAEBCD8; };
-		57BB9C86FC554657B0B3C9EA = {isa = PBXBuildFile; fileRef = B48DE956E61C4DFE9CAEBCD8; };
-		17775DEB9C0D4BEDB6D260E8 = {isa = PBXBuildFile; fileRef = 340520DCC20949AB91B836CB; };
-		0AD7E26E37F249B4AB8171E9 = {isa = PBXBuildFile; fileRef = 6BA2153A5B624B7F90099C2C; };
-		A05220D394A547B49E59AD93 = {isa = PBXBuildFile; fileRef = CBC93892ED134FFEB454AED9; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
-		CBC93892ED134FFEB454AED9 = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; path = NetRateSleepHelper; sourceTree = BUILT_PRODUCTS_DIR; };
-		F31DCA021739447997F90CE6 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (17775DEB9C0D4BEDB6D260E8, 57BB9C86FC554657B0B3C9EA); runOnlyForDeploymentPostprocessing = 0; };
-		A8AAA957D8C840B38267B03E = {
-			isa = PBXCopyFilesBuildPhase;
-			name = "Embed Sleep Helper";
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 6;
-			files = (A05220D394A547B49E59AD93);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		570DD89477C6402D8FDD1123 = {
-			isa = PBXCopyFilesBuildPhase;
-			name = "Embed LaunchDaemon Plist";
-			buildActionMask = 2147483647;
-			dstPath = "Contents/Library/LaunchDaemons";
-			dstSubfolderSpec = 1;
-			files = (0AD7E26E37F249B4AB8171E9);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		8806FA5ADC4B45AB9E513DB3 = {
+
+/* Begin PBXBuildFile section */
+		0AD7E26E37F249B4AB8171E9 /* com.smartgrey.netrate.sleep-helper.plist in Embed LaunchDaemon Plist */ = {isa = PBXBuildFile; fileRef = 6BA2153A5B624B7F90099C2C /* com.smartgrey.netrate.sleep-helper.plist */; };
+		17775DEB9C0D4BEDB6D260E8 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 340520DCC20949AB91B836CB /* main.swift */; };
+		57BB9C86FC554657B0B3C9EA /* SleepService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B48DE956E61C4DFE9CAEBCD8 /* SleepService.swift */; };
+		9B5810EFC61D2785D58719B7 /* libStatusBarCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = E23EF4DFD8458EBA92BF9064 /* libStatusBarCore.a */; };
+		A05220D394A547B49E59AD93 /* NetRateSleepHelper in Embed Sleep Helper */ = {isa = PBXBuildFile; fileRef = CBC93892ED134FFEB454AED9 /* NetRateSleepHelper */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		C9ADC522A1A91929C1CD0D26 /* libStatusBarCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = E23EF4DFD8458EBA92BF9064 /* libStatusBarCore.a */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		26A576F0763C72E0175559F9 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
-			containerPortal = 244210E48437B6556980A702;
+			containerPortal = 244210E48437B6556980A702 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AD49525DA12890742EA8E805;
+			remoteInfo = StatusBarCore;
+		};
+		8806FA5ADC4B45AB9E513DB3 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 244210E48437B6556980A702 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = EA16F0BA1BA64466B7F3DAED;
 			remoteInfo = NetRateSleepHelper;
 		};
-		C78631951368404CBE5A1D32 = {isa = PBXTargetDependency; target = EA16F0BA1BA64466B7F3DAED; targetProxy = 8806FA5ADC4B45AB9E513DB3; };
-		EA16F0BA1BA64466B7F3DAED = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = AF2BFC1E22C948E184D480CF;
-			buildPhases = (F31DCA021739447997F90CE6);
-			buildRules = ();
-			dependencies = ();
-			name = NetRateSleepHelper;
-			productName = NetRateSleepHelper;
-			productReference = CBC93892ED134FFEB454AED9;
-			productType = "com.apple.product-type.tool";
+		9FC031F3045D2B403301CB3F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 244210E48437B6556980A702 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AD49525DA12890742EA8E805;
+			remoteInfo = StatusBarCore;
 		};
-		AF2BFC1E22C948E184D480CF = {
-			isa = XCConfigurationList;
-			buildConfigurations = (37BA4557F9B3495C87932CF4, D06CBCEC0A6249EC9B84960F);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		570DD89477C6402D8FDD1123 /* Embed LaunchDaemon Plist */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Library/LaunchDaemons;
+			dstSubfolderSpec = 1;
+			files = (
+				0AD7E26E37F249B4AB8171E9 /* com.smartgrey.netrate.sleep-helper.plist in Embed LaunchDaemon Plist */,
+			);
+			name = "Embed LaunchDaemon Plist";
+			runOnlyForDeploymentPostprocessing = 0;
 		};
-		37BA4557F9B3495C87932CF4 = {
-			isa = XCBuildConfiguration;
-			name = Debug;
-			buildSettings = {
-				PRODUCT_NAME = NetRateSleepHelper;
-				PRODUCT_BUNDLE_IDENTIFIER = com.smartgrey.netrate.sleep-helper;
-				OTHER_CODE_SIGN_FLAGS = "--identifier com.smartgrey.netrate.sleep-helper";
-				ENABLE_HARDENED_RUNTIME = YES;
-				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
-				OTHER_LDFLAGS = "";
-				SWIFT_OBJC_BRIDGING_HEADER = "";
-			};
+		A8AAA957D8C840B38267B03E /* Embed Sleep Helper */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 6;
+			files = (
+				A05220D394A547B49E59AD93 /* NetRateSleepHelper in Embed Sleep Helper */,
+			);
+			name = "Embed Sleep Helper";
+			runOnlyForDeploymentPostprocessing = 0;
 		};
-		D06CBCEC0A6249EC9B84960F = {
-			isa = XCBuildConfiguration;
-			name = Release;
-			buildSettings = {
-				PRODUCT_NAME = NetRateSleepHelper;
-				PRODUCT_BUNDLE_IDENTIFIER = com.smartgrey.netrate.sleep-helper;
-				OTHER_CODE_SIGN_FLAGS = "--identifier com.smartgrey.netrate.sleep-helper";
-				ENABLE_HARDENED_RUNTIME = YES;
-				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
-				OTHER_LDFLAGS = "";
-				SWIFT_OBJC_BRIDGING_HEADER = "";
-			};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		340520DCC20949AB91B836CB /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		43BAEF748146FADD9846961D /* Quick.xctestplan */ = {isa = PBXFileReference; includeInIndex = 1; path = Quick.xctestplan; sourceTree = "<group>"; };
+		4A4172557CC6CF50014428B0 /* NetRateTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = NetRateTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		6B6379FB623BEE82F7B82160 /* 状态栏扩展.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = "状态栏扩展.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		6BA2153A5B624B7F90099C2C /* com.smartgrey.netrate.sleep-helper.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "com.smartgrey.netrate.sleep-helper.plist"; sourceTree = "<group>"; };
+		7E7AC4FAA6ABCC98B99924AB /* Full.xctestplan */ = {isa = PBXFileReference; includeInIndex = 1; path = Full.xctestplan; sourceTree = "<group>"; };
+		B48DE956E61C4DFE9CAEBCD8 /* SleepService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SleepService.swift; path = Sources/SystemSleep/SleepService.swift; sourceTree = SOURCE_ROOT; };
+		CBC93892ED134FFEB454AED9 /* NetRateSleepHelper */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; path = NetRateSleepHelper; sourceTree = BUILT_PRODUCTS_DIR; };
+		E23EF4DFD8458EBA92BF9064 /* libStatusBarCore.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libStatusBarCore.a; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		CB3DF27C33E494F4C6F2E61E /* Exceptions for "Tests" folder in "NetRateTests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Hearing/EnvironmentSoak.cpp,
+				Hearing/Soak.cpp,
+			);
+			target = BA95863F21F825077995DD01 /* NetRateTests */;
 		};
-		76D582D2563C4551AC543CA3 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SystemSleep.swift; path = NetRate/SystemSleep.swift; sourceTree = "<group>"; };
-		AD52E4E132B84DE2840638FB = {isa = PBXBuildFile; fileRef = 76D582D2563C4551AC543CA3; };
-		E7B4178817474B069BF96591 = {isa = PBXBuildFile; fileRef = 76D582D2563C4551AC543CA3; };
-		C92A170D77D34E578F6EDA64 = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = HeaderSession.m; path = NetRate/HeaderSession.m; sourceTree = "<group>"; };
-		692AC96F2974487FB47D940E = {isa = PBXBuildFile; fileRef = C92A170D77D34E578F6EDA64; };
-		3F1BE7105AD348C296F6E441 = {isa = PBXBuildFile; fileRef = C92A170D77D34E578F6EDA64; };
-		4D082D903F934F728EE2B52B = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = HeaderSession.h; path = NetRate/HeaderSession.h; sourceTree = "<group>"; };
-		5A7695C310774EDBB41E2873 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SiteEditor.swift; path = NetRate/SiteEditor.swift; sourceTree = "<group>"; };
-		BB3EE19B90A14222B5F4FD55 = {isa = PBXBuildFile; fileRef = 5A7695C310774EDBB41E2873; };
-		FCEDE4418F4B4C108CA0DF4B = {isa = PBXBuildFile; fileRef = 5A7695C310774EDBB41E2873; };
-		B282C397F5184C93B7AA1CA5 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ProbeMenu.swift; path = NetRate/ProbeMenu.swift; sourceTree = "<group>"; };
-		AB2831D52E2F4254A6226CCE = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ProbeHelp.swift; path = NetRate/ProbeHelp.swift; sourceTree = "<group>"; };
-		2A329256403D4764BD56FB37 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ConfigurationHelp.swift; path = NetRate/ConfigurationHelp.swift; sourceTree = "<group>"; };
-		ACD4894069C34D0AA4D60E20 = {isa = PBXBuildFile; fileRef = B282C397F5184C93B7AA1CA5; };
-		FC6CBB6D7ABA4136AF799043 = {isa = PBXBuildFile; fileRef = AB2831D52E2F4254A6226CCE; };
-		8D81058DD8924E2EB8E56995 = {isa = PBXBuildFile; fileRef = 2A329256403D4764BD56FB37; };
-		555332E009244B698871E481 = {isa = PBXBuildFile; fileRef = B282C397F5184C93B7AA1CA5; };
-		8EB49F73DAE04C26A095FB3B = {isa = PBXBuildFile; fileRef = AB2831D52E2F4254A6226CCE; };
-		5F5DCB234C8B4856B005EFAC = {isa = PBXBuildFile; fileRef = 2A329256403D4764BD56FB37; };
-		AFE2200117B04B03B5DA6F87 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ProbeState.swift; path = NetRate/ProbeState.swift; sourceTree = "<group>"; };
-		B6D5821FCD9E491DA9563315 = {isa = PBXBuildFile; fileRef = AFE2200117B04B03B5DA6F87; };
-		10ECC9448579499CBEBB3DB2 = {isa = PBXBuildFile; fileRef = AFE2200117B04B03B5DA6F87; };
-		000167372C75414B81FFFB6F = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ProbeSettings.swift; path = NetRate/ProbeSettings.swift; sourceTree = "<group>"; };
-		2766DE4C18214819BC8DAE20 = {isa = PBXBuildFile; fileRef = 000167372C75414B81FFFB6F; };
-		458168342CE24599AD858E69 = {isa = PBXBuildFile; fileRef = 000167372C75414B81FFFB6F; };
-		04B21A5F00D4A12496351C7A = {
-			isa = "PBXFileReference";
-			lastKnownFileType = "sourcecode.swift";
-			path = "NetRate/Connectivity.swift";
-			name = "Connectivity.swift";
+		E15DDAD195DC4A921168C284 /* Exceptions for "App" folder in "NetRate" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+				NetRate.entitlements,
+			);
+			target = 7557544C4E541E5493A857EF /* NetRate */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		2EB56BE3C2D93CDAB0C52E67 /* Sources */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+			);
+			path = Sources;
 			sourceTree = "<group>";
 		};
-		8B76018CD814B2909EBB601A = {
-			isa = "PBXBuildFile";
-			fileRef = 04B21A5F00D4A12496351C7A;
-		};
-		CC9B92BACD1246AF830B5D1C = {
-			isa = "PBXBuildFile";
-			fileRef = 04B21A5F00D4A12496351C7A;
-		};
-		6B6379FB623BEE82F7B82160 = {
-			isa = "PBXFileReference";
-			explicitFileType = "wrapper.application";
-			path = "网速.app";
-			sourceTree = "BUILT_PRODUCTS_DIR";
-		};
-		61D44C6EC800F9A977176F36 = {
-			isa = "PBXFileReference";
-			lastKnownFileType = "sourcecode.swift";
-			path = "NetRate/Traffic.swift";
-			name = "Traffic.swift";
+		39FDEC1194D94212B871A28B /* Tests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				CB3DF27C33E494F4C6F2E61E /* Exceptions for "Tests" folder in "NetRateTests" target */,
+			);
+			path = Tests;
 			sourceTree = "<group>";
 		};
-		00BE99F7204D5B012B7EE6E5 = {
-			isa = "PBXBuildFile";
-			fileRef = 61D44C6EC800F9A977176F36;
-		};
-		A451A60AC55B4463380F948E = {
-			isa = "PBXFileReference";
-			lastKnownFileType = "sourcecode.swift";
-			path = "NetRate/Reader.swift";
-			name = "Reader.swift";
+		FC4A695F02A8A53A129DCB9A /* App */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				E15DDAD195DC4A921168C284 /* Exceptions for "App" folder in "NetRate" target */,
+			);
+			path = App;
 			sourceTree = "<group>";
 		};
-		86F6338D4A17FB998C8154B5 = {
-			isa = "PBXBuildFile";
-			fileRef = A451A60AC55B4463380F948E;
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		1E3EFE62B3388F8BD4A415E0 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9B5810EFC61D2785D58719B7 /* libStatusBarCore.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
 		};
-		781B7A5A4E1FE36B98E19D96 = {
-			isa = "PBXFileReference";
-			lastKnownFileType = "sourcecode.swift";
-			path = "NetRate/Readout.swift";
-			name = "Readout.swift";
+		673A0E9650DF13CFF44B1884 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C9ADC522A1A91929C1CD0D26 /* libStatusBarCore.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		0A3E27B8CA818264D75C8D81 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				CBC93892ED134FFEB454AED9 /* NetRateSleepHelper */,
+				6B6379FB623BEE82F7B82160 /* 状态栏扩展.app */,
+				4A4172557CC6CF50014428B0 /* NetRateTests.xctest */,
+				E23EF4DFD8458EBA92BF9064 /* libStatusBarCore.a */,
+			);
+			name = Products;
 			sourceTree = "<group>";
 		};
-		A76AF2891C6179794654E757 = {
-			isa = "PBXBuildFile";
-			fileRef = 781B7A5A4E1FE36B98E19D96;
-		};
-		B597908372D7F1D88671B624 = {
-			isa = "PBXFileReference";
-			lastKnownFileType = "sourcecode.swift";
-			path = "NetRate/Application.swift";
-			name = "Application.swift";
-			sourceTree = "<group>";
-		};
-		4519337406BE9A993012661E = {
-			isa = "PBXBuildFile";
-			fileRef = B597908372D7F1D88671B624;
-		};
-		D0F5D50A289A08EA668A4140 = {
-			isa = "PBXFileReference";
-			lastKnownFileType = "sourcecode.swift";
-			path = "NetRate/StatusFace.swift";
-			name = "StatusFace.swift";
-			sourceTree = "<group>";
-		};
-		D12732C8B64D4CB3C2A1FAD8 = {
-			isa = "PBXBuildFile";
-			fileRef = D0F5D50A289A08EA668A4140;
-		};
-		2EDE5EC237854F898FACE418 = {
-			isa = "PBXFileReference";
-			lastKnownFileType = "sourcecode.swift";
-			path = "NetRate/StatusHover.swift";
-			name = "StatusHover.swift";
-			sourceTree = "<group>";
-		};
-		48EEB074198D4B3FB27D33EE = {
-			isa = "PBXBuildFile";
-			fileRef = 2EDE5EC237854F898FACE418;
-		};
-		16AC7DDCC1AA436995DCD27F = {
-			isa = "PBXBuildFile";
-			fileRef = 2EDE5EC237854F898FACE418;
-		};
-		B11AB53CD57F477EA61DE959 = {
-			isa = "PBXFileReference";
-			lastKnownFileType = "sourcecode.swift";
-			path = "NetRate/SiteSettingsWindow.swift";
-			name = "SiteSettingsWindow.swift";
-			sourceTree = "<group>";
-		};
-		6D1202C140E446CB82F76F8A = {
-			isa = "PBXBuildFile";
-			fileRef = B11AB53CD57F477EA61DE959;
-		};
-		10DA3C785C664AE2B2D001A = {
-			isa = "PBXBuildFile";
-			fileRef = B11AB53CD57F477EA61DE959;
-		};
-		047DD7481B164FC1347A7F01 = {
-			isa = "PBXSourcesBuildPhase";
-			buildActionMask = "2147483647";
-			files = (70DC7608295B413AB47DED01, FC791766114FAEFA3E82E72C, 7F137332D3636771156EEA68, F78DFBB23C761AC6365C074E, 1B56E723BE4D30E6135975EB, 74E56740E3C8180711E4A903, 1DEEEA1E0DDD80E5E367B237, 2FEC11BE4D61044859AF2AEC, B4EB5081AC775496DE9D8A44, 4F1B175123DDA76DF6C22D8F, 95A3718824D2F0476D754B88, 5FC850DC56F887641A2FEBBD, 097CDC0756130F0322C30D43, 2F96835E9796A1688314B63C, 42C0A9D62AE4479387050F0D, B2D425EF8A7E46EDB78D98FA, D5AFBE12358E4C6F87DD7A9E, CF9BE9CE0D674B6EB0A57D42, 1E54772446F44835B4744EA0, 1C19F6C6990C4F358B65F0C5, AFCCB636B0CF4EB1A2C8A646, E0A2C59343E447318E7D5FB7, 4F57BC633A014EAA8BCF6987, 866C58C760224D2D8ECCB6AB, 4571A8307927468BB62083E8, 21DD285077B74754AA531752, 1072577E5F9F4D2EBC2C847C, 0661F73604BB408CBA446236, 80635C538FFC4ABF9B1E5042, AD52E4E132B84DE2840638FB, 8B76018CD814B2909EBB601A, B6D5821FCD9E491DA9563315, 2766DE4C18214819BC8DAE20, 00BE99F7204D5B012B7EE6E5, 86F6338D4A17FB998C8154B5, A76AF2891C6179794654E757, 4519337406BE9A993012661E, D12732C8B64D4CB3C2A1FAD8, 48EEB074198D4B3FB27D33EE, FC6CBB6D7ABA4136AF799043, ACD4894069C34D0AA4D60E20, 8D81058DD8924E2EB8E56995, BB3EE19B90A14222B5F4FD55, 692AC96F2974487FB47D940E, 6D1202C140E446CB82F76F8A);
-			runOnlyForDeploymentPostprocessing = "0";
-		};
-		2409A44F3683ECE1E2E846FD = {
-			isa = "XCBuildConfiguration";
-			name = "Debug";
-			buildSettings = {
-				PRODUCT_NAME = "网速";
-				PRODUCT_MODULE_NAME = "NetRate";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.smartgrey.netrate";
-				GENERATE_INFOPLIST_FILE = "YES";
-				CURRENT_PROJECT_VERSION = "1";
-				MARKETING_VERSION = "1.0";
-				INFOPLIST_FILE = "NetRate/Info.plist";
-				CODE_SIGN_ENTITLEMENTS = NetRate/NetRate.entitlements;
-				ENABLE_HARDENED_RUNTIME = "YES";
-				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
-				GCC_OPTIMIZATION_LEVEL = "0";
-				DEBUG_INFORMATION_FORMAT = "dwarf";
-				ENABLE_TESTABILITY = "YES";
-			};
-		};
-		68A5192DF02DE0F96F44D720 = {
-			isa = "XCBuildConfiguration";
-			name = "Release";
-			buildSettings = {
-				PRODUCT_NAME = "网速";
-				PRODUCT_MODULE_NAME = "NetRate";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.smartgrey.netrate";
-				GENERATE_INFOPLIST_FILE = "YES";
-				CURRENT_PROJECT_VERSION = "1";
-				MARKETING_VERSION = "1.0";
-				INFOPLIST_FILE = "NetRate/Info.plist";
-				CODE_SIGN_ENTITLEMENTS = NetRate/NetRate.entitlements;
-				ENABLE_HARDENED_RUNTIME = "YES";
-				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
-				SWIFT_OPTIMIZATION_LEVEL = "-O";
-				GCC_OPTIMIZATION_LEVEL = "s";
-				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-			};
-		};
-		1D53A614EA0A1C5C52B54F7B = {
-			isa = "XCConfigurationList";
-			buildConfigurations = (2409A44F3683ECE1E2E846FD, 68A5192DF02DE0F96F44D720);
-			defaultConfigurationIsVisible = "0";
-			defaultConfigurationName = "Release";
-		};
-		7557544C4E541E5493A857EF = {
-			isa = "PBXNativeTarget";
-			name = "NetRate";
-			productName = "NetRate";
-			productReference = 6B6379FB623BEE82F7B82160;
-			productType = "com.apple.product-type.application";
-			buildConfigurationList = 1D53A614EA0A1C5C52B54F7B;
-			buildPhases = (047DD7481B164FC1347A7F01, A8AAA957D8C840B38267B03E, 570DD89477C6402D8FDD1123);
-			buildRules = ();
-			dependencies = (C78631951368404CBE5A1D32);
-		};
-		4A4172557CC6CF50014428B0 = {
-			isa = "PBXFileReference";
-			explicitFileType = "wrapper.cfbundle";
-			path = "NetRateTests.xctest";
-			sourceTree = "BUILT_PRODUCTS_DIR";
-		};
-		DDD03BDCA2206981C3110836 = {
-			isa = "PBXBuildFile";
-			fileRef = 61D44C6EC800F9A977176F36;
-		};
-		9C2368BFA6AA650DBD70904F = {
-			isa = "PBXBuildFile";
-			fileRef = A451A60AC55B4463380F948E;
-		};
-		9F99F5EE31051800FA537C50 = {
-			isa = "PBXBuildFile";
-			fileRef = 781B7A5A4E1FE36B98E19D96;
-		};
-		FDA8045145ED0E1CC25A3F3A = {
-			isa = "PBXFileReference";
-			lastKnownFileType = "sourcecode.swift";
-			path = "Tests/NetRateTests.swift";
-			name = "NetRateTests.swift";
-			sourceTree = "<group>";
-		};
-		FB1601E4AE71E8A7161E1936 = {
-			isa = "PBXBuildFile";
-			fileRef = FDA8045145ED0E1CC25A3F3A;
-		};
-		3912C734CBF142178FDE5E05 = {
-			isa = "PBXBuildFile";
-			fileRef = D0F5D50A289A08EA668A4140;
-		};
-		B28C7F6C3673D9563F6270FB = {
-			isa = "PBXSourcesBuildPhase";
-			buildActionMask = "2147483647";
-			files = (70DC7608295B413AB47DED02, 451F4F3FC9EFC5456E94AD1C, F15597D6144E11839B805C4A, 49F9A71F741B7B2D92B90430, 834E641BCC4C10E0F96A6FFA, D9DCF34AC55696A073146A70, 56EA2B746B7EF9BE07F219F5, B268F5E18C59652F7E74011F, 20C053B69EE48F684352F18B, FDA60932CAD8369847BBC672, FF043829BC8401507A47F01D, 6FD1587C17A587E0744C54B7, 99303C2B408758481F421A11, AA9891218AE4ABB75E7EEB02, 3BA95E71028EE56CA3441F35, DA95D289C44A3401686301A4, 6B27ED30ACFC42E0FFB24632, 96F5FF86139CB3E3365A1D61, A0EC010CD21D4036753A13F3, F485DD02CC684632D1008C05, 1668EB7B1AC53E93864C41E8, 441CCD7A0CF042EDA9828087, E649008820D843FC8109C924, 235BC5B01CC04A12993B195E, FD268DECDC3A4577824C1418, C091E62B0A7C44769030D70E, 25EAB7452B9B4BA184393E3B, 4C37A5E5FE5F4AB2BA5CC8C8, A66AD10B3B18422BBA1BFF36, 9E60AF98CF2D49CAB14C577D, 10D4C86653694E58AC519E5E, 3FBD9914DAC8482EAC1B07F7, 22E603485F6843C892EF6344, 9158876C8F0F4839B669404A, 304AD7A7AD364FC7A53035FF, 5D0BFFDC2EFE4076B7754AC3, BC4DCD4995EB4C2EBC769AAA, F142CFBDFAC44DC383AA28BB, 4390A2D18C8545E6BA9EC980, E7B4178817474B069BF96591, CC9B92BACD1246AF830B5D1C, 10ECC9448579499CBEBB3DB2, 458168342CE24599AD858E69, DDD03BDCA2206981C3110836, 9C2368BFA6AA650DBD70904F, 9F99F5EE31051800FA537C50, FB1601E4AE71E8A7161E1936, 3912C734CBF142178FDE5E05, 16AC7DDCC1AA436995DCD27F, 8EB49F73DAE04C26A095FB3B, 555332E009244B698871E481, 5F5DCB234C8B4856B005EFAC, FCEDE4418F4B4C108CA0DF4B, 3F1BE7105AD348C296F6E441, 10DA3C785C664AE2B2D001A);
-			runOnlyForDeploymentPostprocessing = "0";
-		};
-		FEB10A1207100AC9BEC7FDC9 = {
-			isa = "XCBuildConfiguration";
-			name = "Debug";
-			buildSettings = {
-				PRODUCT_NAME = "NetRateTests";
-				HEADER_SEARCH_PATHS = "$(SRCROOT)/NetRate/Hearing/AudioCore";
-				PRODUCT_MODULE_NAME = "NetRateTests";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.smartgrey.netrate.tests";
-				GENERATE_INFOPLIST_FILE = "YES";
-				CURRENT_PROJECT_VERSION = "1";
-				MARKETING_VERSION = "1.0";
-				ENABLE_TESTING_SEARCH_PATHS = "YES";
-				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
-				GCC_OPTIMIZATION_LEVEL = "0";
-				DEBUG_INFORMATION_FORMAT = "dwarf";
-				ENABLE_TESTABILITY = "YES";
-			};
-		};
-		E1658D75EDC1E421087D9565 = {
-			isa = "XCBuildConfiguration";
-			name = "Release";
-			buildSettings = {
-				PRODUCT_NAME = "NetRateTests";
-				HEADER_SEARCH_PATHS = "$(SRCROOT)/NetRate/Hearing/AudioCore";
-				PRODUCT_MODULE_NAME = "NetRateTests";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.smartgrey.netrate.tests";
-				GENERATE_INFOPLIST_FILE = "YES";
-				CURRENT_PROJECT_VERSION = "1";
-				MARKETING_VERSION = "1.0";
-				ENABLE_TESTING_SEARCH_PATHS = "YES";
-				SWIFT_OPTIMIZATION_LEVEL = "-O";
-				GCC_OPTIMIZATION_LEVEL = "s";
-				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-			};
-		};
-		41F0A6064B5B9A0793A5EC4A = {
-			isa = "XCConfigurationList";
-			buildConfigurations = (FEB10A1207100AC9BEC7FDC9, E1658D75EDC1E421087D9565);
-			defaultConfigurationIsVisible = "0";
-			defaultConfigurationName = "Release";
-		};
-		BA95863F21F825077995DD01 = {
-			isa = "PBXNativeTarget";
-			name = "NetRateTests";
-			productName = "NetRateTests";
-			productReference = 4A4172557CC6CF50014428B0;
-			productType = "com.apple.product-type.bundle.unit-test";
-			buildConfigurationList = 41F0A6064B5B9A0793A5EC4A;
-			buildPhases = (B28C7F6C3673D9563F6270FB);
-			buildRules = ();
-			dependencies = ();
-		};
-		6F6E4BE53ACB34E179C51DA1 = {
-			isa = "PBXFileReference";
-			lastKnownFileType = "text.plist.xml";
-			path = "NetRate/Info.plist";
-			name = "Info.plist";
-			sourceTree = "<group>";
-		};
-		85DA851E621B4FF316571457 = {
-			isa = "PBXGroup";
-			name = "NetRate";
-			children = (70DC7608295B413AB47DED00, D37483069955730330FA251D, 3B56C75B7A24FC5085867FA8, 8594096C7E6591BA8151874A, 0E69F0B89C29CFB29DF46019, DDF664AD2C2048D3A2E7E620, EF7C6B1C26F24EF2AB1C2BED, 8ACCC69A193B4763AE2F5297, 9C78819E863644AE9905A885, 3FD28CE991D94EA3B4C92B38, 0ABE8DA5DDDA4FEC801E2028, 78E6628AE5B74FFFB30C28AD, 4BAED50EA99B45CEB71A2584, 00926FB22D5F4B7FA490A0A0, A2C0C6191AF648D78C6B56B1, B48DE956E61C4DFE9CAEBCD8, 340520DCC20949AB91B836CB, 6BA2153A5B624B7F90099C2C, 76D582D2563C4551AC543CA3, 04B21A5F00D4A12496351C7A, AFE2200117B04B03B5DA6F87, 000167372C75414B81FFFB6F, 61D44C6EC800F9A977176F36, A451A60AC55B4463380F948E, 781B7A5A4E1FE36B98E19D96, B597908372D7F1D88671B624, D0F5D50A289A08EA668A4140, 2EDE5EC237854F898FACE418, AB2831D52E2F4254A6226CCE, B282C397F5184C93B7AA1CA5, 2A329256403D4764BD56FB37, 5A7695C310774EDBB41E2873, 4D082D903F934F728EE2B52B, C92A170D77D34E578F6EDA64, B11AB53CD57F477EA61DE959, 6F6E4BE53ACB34E179C51DA1);
-			sourceTree = "<group>";
-		};
-		6DC4FAD667A85B8567F612FB = {
-			isa = "PBXGroup";
-			name = "Tests";
-			children = (B5BC5CAA1CD719B43E26B537, A6CA34F92D8842699F0871FC, AD83A3BE4A5B4C118DA07006, 003DCB9425604F3EAE371750, FDA8045145ED0E1CC25A3F3A);
-			sourceTree = "<group>";
-		};
-		0A3E27B8CA818264D75C8D81 = {
-			isa = "PBXGroup";
-			children = (CBC93892ED134FFEB454AED9, 6B6379FB623BEE82F7B82160, 4A4172557CC6CF50014428B0);
-			name = "Products";
+		240DD6ABA02B1E3EB3C0CD48 /* SleepHelper */ = {
+			isa = PBXGroup;
+			children = (
+				340520DCC20949AB91B836CB /* main.swift */,
+				6BA2153A5B624B7F90099C2C /* com.smartgrey.netrate.sleep-helper.plist */,
+				B48DE956E61C4DFE9CAEBCD8 /* SleepService.swift */,
+			);
+			path = SleepHelper;
 			sourceTree = "<group>";
 		};
 		4813494D137E1631BBA301D5 = {
-			isa = "PBXGroup";
-			children = (85DA851E621B4FF316571457, 6DC4FAD667A85B8567F612FB, 0A3E27B8CA818264D75C8D81);
+			isa = PBXGroup;
+			children = (
+				FC4A695F02A8A53A129DCB9A /* App */,
+				2EB56BE3C2D93CDAB0C52E67 /* Sources */,
+				240DD6ABA02B1E3EB3C0CD48 /* SleepHelper */,
+				39FDEC1194D94212B871A28B /* Tests */,
+				0A3E27B8CA818264D75C8D81 /* Products */,
+				F4B5086A68E414192EAEFF78 /* TestPlans */,
+			);
 			sourceTree = "<group>";
 		};
-		FDD3EA28A0B1309668A442B2 = {
-			isa = "XCBuildConfiguration";
-			name = "Debug";
-			buildSettings = {
-				ALWAYS_SEARCH_USER_PATHS = "NO";
-				CLANG_ENABLE_OBJC_ARC = YES;
-				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
-				OTHER_LDFLAGS = ("-lcurl", "-framework", "AudioToolbox", "-framework", "Accelerate", "-framework", "CoreAudio");
-				SWIFT_OBJC_BRIDGING_HEADER = "NetRate/NetRate-Bridging-Header.h";
-				SDKROOT = "macosx";
-				SUPPORTED_PLATFORMS = "macosx";
-				MACOSX_DEPLOYMENT_TARGET = "26.0";
-				ARCHS = "arm64";
-				SWIFT_VERSION = "6.0";
-				CODE_SIGN_IDENTITY = "-";
-				CODE_SIGN_STYLE = "Manual";
-				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
-				GCC_OPTIMIZATION_LEVEL = "0";
-				DEBUG_INFORMATION_FORMAT = "dwarf";
-				ENABLE_TESTABILITY = "YES";
-			};
+		F4B5086A68E414192EAEFF78 /* TestPlans */ = {
+			isa = PBXGroup;
+			children = (
+				43BAEF748146FADD9846961D /* Quick.xctestplan */,
+				7E7AC4FAA6ABCC98B99924AB /* Full.xctestplan */,
+			);
+			name = TestPlans;
+			path = TestPlans;
+			sourceTree = "<group>";
 		};
-		8DB23D5B0AA80A48AA651830 = {
-			isa = "XCBuildConfiguration";
-			name = "Release";
-			buildSettings = {
-				ALWAYS_SEARCH_USER_PATHS = "NO";
-				CLANG_ENABLE_OBJC_ARC = YES;
-				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
-				OTHER_LDFLAGS = ("-lcurl", "-framework", "AudioToolbox", "-framework", "Accelerate", "-framework", "CoreAudio");
-				SWIFT_OBJC_BRIDGING_HEADER = "NetRate/NetRate-Bridging-Header.h";
-				SDKROOT = "macosx";
-				SUPPORTED_PLATFORMS = "macosx";
-				MACOSX_DEPLOYMENT_TARGET = "26.0";
-				ARCHS = "arm64";
-				SWIFT_VERSION = "6.0";
-				CODE_SIGN_IDENTITY = "-";
-				CODE_SIGN_STYLE = "Manual";
-				SWIFT_OPTIMIZATION_LEVEL = "-O";
-				GCC_OPTIMIZATION_LEVEL = "s";
-				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-			};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		7557544C4E541E5493A857EF /* NetRate */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1D53A614EA0A1C5C52B54F7B /* Build configuration list for PBXNativeTarget "NetRate" */;
+			buildPhases = (
+				047DD7481B164FC1347A7F01 /* Sources */,
+				673A0E9650DF13CFF44B1884 /* Frameworks */,
+				8ECC8B5D05B79F879ACDF1A2 /* Resources */,
+				A8AAA957D8C840B38267B03E /* Embed Sleep Helper */,
+				570DD89477C6402D8FDD1123 /* Embed LaunchDaemon Plist */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C78631951368404CBE5A1D32 /* PBXTargetDependency */,
+				15645187B91DB3593E5CDDCD /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				FC4A695F02A8A53A129DCB9A /* App */,
+			);
+			name = NetRate;
+			productName = NetRate;
+			productReference = 6B6379FB623BEE82F7B82160 /* 状态栏扩展.app */;
+			productType = "com.apple.product-type.application";
 		};
-		9F6B1A7BCFF26D263B843F95 = {
-			isa = "XCConfigurationList";
-			buildConfigurations = (FDD3EA28A0B1309668A442B2, 8DB23D5B0AA80A48AA651830);
-			defaultConfigurationIsVisible = "0";
-			defaultConfigurationName = "Release";
+		AD49525DA12890742EA8E805 /* StatusBarCore */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7ADFF174C885876656137322 /* Build configuration list for PBXNativeTarget "StatusBarCore" */;
+			buildPhases = (
+				9694AE9A1E544CB4A318244A /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				2EB56BE3C2D93CDAB0C52E67 /* Sources */,
+			);
+			name = StatusBarCore;
+			productName = StatusBarCore;
+			productReference = E23EF4DFD8458EBA92BF9064 /* libStatusBarCore.a */;
+			productType = "com.apple.product-type.library.static";
 		};
-		244210E48437B6556980A702 = {
-			isa = "PBXProject";
+		BA95863F21F825077995DD01 /* NetRateTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 41F0A6064B5B9A0793A5EC4A /* Build configuration list for PBXNativeTarget "NetRateTests" */;
+			buildPhases = (
+				B28C7F6C3673D9563F6270FB /* Sources */,
+				1E3EFE62B3388F8BD4A415E0 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				FF3CD31139FDF698FC50D700 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				39FDEC1194D94212B871A28B /* Tests */,
+			);
+			name = NetRateTests;
+			productName = NetRateTests;
+			productReference = 4A4172557CC6CF50014428B0 /* NetRateTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		EA16F0BA1BA64466B7F3DAED /* NetRateSleepHelper */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AF2BFC1E22C948E184D480CF /* Build configuration list for PBXNativeTarget "NetRateSleepHelper" */;
+			buildPhases = (
+				F31DCA021739447997F90CE6 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = NetRateSleepHelper;
+			productName = NetRateSleepHelper;
+			productReference = CBC93892ED134FFEB454AED9 /* NetRateSleepHelper */;
+			productType = "com.apple.product-type.tool";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		244210E48437B6556980A702 /* Project object */ = {
+			isa = PBXProject;
 			attributes = {
-				LastUpgradeCheck = "2700";
+				LastUpgradeCheck = 2700;
 			};
-			buildConfigurationList = 9F6B1A7BCFF26D263B843F95;
-			compatibilityVersion = "Xcode 14.0";
-			developmentRegion = "zh_CN";
-			knownRegions = ("zh_CN", "Base");
+			buildConfigurationList = 9F6B1A7BCFF26D263B843F95 /* Build configuration list for PBXProject "NetRate" */;
+			developmentRegion = zh_CN;
+			knownRegions = (
+				zh_CN,
+				Base,
+			);
 			mainGroup = 4813494D137E1631BBA301D5;
-			productRefGroup = 0A3E27B8CA818264D75C8D81;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 0A3E27B8CA818264D75C8D81 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
-			targets = (EA16F0BA1BA64466B7F3DAED, 7557544C4E541E5493A857EF, BA95863F21F825077995DD01);
+			targets = (
+				EA16F0BA1BA64466B7F3DAED /* NetRateSleepHelper */,
+				7557544C4E541E5493A857EF /* NetRate */,
+				BA95863F21F825077995DD01 /* NetRateTests */,
+				AD49525DA12890742EA8E805 /* StatusBarCore */,
+			);
 		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		8ECC8B5D05B79F879ACDF1A2 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		047DD7481B164FC1347A7F01 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		9694AE9A1E544CB4A318244A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B28C7F6C3673D9563F6270FB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F31DCA021739447997F90CE6 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				17775DEB9C0D4BEDB6D260E8 /* main.swift in Sources */,
+				57BB9C86FC554657B0B3C9EA /* SleepService.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		15645187B91DB3593E5CDDCD /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AD49525DA12890742EA8E805 /* StatusBarCore */;
+			targetProxy = 9FC031F3045D2B403301CB3F /* PBXContainerItemProxy */;
+		};
+		C78631951368404CBE5A1D32 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = EA16F0BA1BA64466B7F3DAED /* NetRateSleepHelper */;
+			targetProxy = 8806FA5ADC4B45AB9E513DB3 /* PBXContainerItemProxy */;
+		};
+		FF3CD31139FDF698FC50D700 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AD49525DA12890742EA8E805 /* StatusBarCore */;
+			targetProxy = 26A576F0763C72E0175559F9 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		2409A44F3683ECE1E2E846FD /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/NetRate.entitlements;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = App/Info.plist;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.smartgrey.netrate;
+				PRODUCT_MODULE_NAME = NetRate;
+				PRODUCT_NAME = "状态栏扩展";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		37BA4557F9B3495C87932CF4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				OTHER_CODE_SIGN_FLAGS = "--identifier com.smartgrey.netrate.sleep-helper";
+				OTHER_LDFLAGS = "";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.smartgrey.netrate.sleep-helper";
+				PRODUCT_NAME = NetRateSleepHelper;
+			};
+			name = Debug;
+		};
+		68A5192DF02DE0F96F44D720 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/NetRate.entitlements;
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_HARDENED_RUNTIME = YES;
+				GCC_OPTIMIZATION_LEVEL = s;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = App/Info.plist;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.smartgrey.netrate;
+				PRODUCT_MODULE_NAME = NetRate;
+				PRODUCT_NAME = "状态栏扩展";
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		8DB23D5B0AA80A48AA651830 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				GCC_OPTIMIZATION_LEVEL = s;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				OTHER_LDFLAGS = (
+					"-lcurl",
+					"-framework",
+					AudioToolbox,
+					"-framework",
+					Accelerate,
+					"-framework",
+					CoreAudio,
+					"-lc++",
+				);
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Sources/Native";
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		BFB243E4BABEFB95EEBA3E39 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				DEFINES_MODULE = YES;
+				ENABLE_TESTABILITY = YES;
+				PRODUCT_NAME = StatusBarCore;
+				SKIP_INSTALL = YES;
+				SWIFT_INSTALL_OBJC_HEADER = NO;
+			};
+			name = Release;
+		};
+		C313AE27D6D003074785A2F6 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				DEFINES_MODULE = YES;
+				ENABLE_TESTABILITY = YES;
+				PRODUCT_NAME = StatusBarCore;
+				SKIP_INSTALL = YES;
+				SWIFT_INSTALL_OBJC_HEADER = NO;
+			};
+			name = Debug;
+		};
+		D06CBCEC0A6249EC9B84960F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				OTHER_CODE_SIGN_FLAGS = "--identifier com.smartgrey.netrate.sleep-helper";
+				OTHER_LDFLAGS = "";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.smartgrey.netrate.sleep-helper";
+				PRODUCT_NAME = NetRateSleepHelper;
+			};
+			name = Release;
+		};
+		E1658D75EDC1E421087D9565 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_TESTING_SEARCH_PATHS = YES;
+				GCC_OPTIMIZATION_LEVEL = s;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/Sources/Hearing/AudioCore";
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.smartgrey.netrate.tests;
+				PRODUCT_MODULE_NAME = NetRateTests;
+				PRODUCT_NAME = NetRateTests;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		FDD3EA28A0B1309668A442B2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				OTHER_LDFLAGS = (
+					"-lcurl",
+					"-framework",
+					AudioToolbox,
+					"-framework",
+					Accelerate,
+					"-framework",
+					CoreAudio,
+					"-lc++",
+				);
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Sources/Native";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		FEB10A1207100AC9BEC7FDC9 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_TESTING_SEARCH_PATHS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/Sources/Hearing/AudioCore";
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.smartgrey.netrate.tests;
+				PRODUCT_MODULE_NAME = NetRateTests;
+				PRODUCT_NAME = NetRateTests;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		1D53A614EA0A1C5C52B54F7B /* Build configuration list for PBXNativeTarget "NetRate" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2409A44F3683ECE1E2E846FD /* Debug */,
+				68A5192DF02DE0F96F44D720 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		41F0A6064B5B9A0793A5EC4A /* Build configuration list for PBXNativeTarget "NetRateTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FEB10A1207100AC9BEC7FDC9 /* Debug */,
+				E1658D75EDC1E421087D9565 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		7ADFF174C885876656137322 /* Build configuration list for PBXNativeTarget "StatusBarCore" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C313AE27D6D003074785A2F6 /* Debug */,
+				BFB243E4BABEFB95EEBA3E39 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		9F6B1A7BCFF26D263B843F95 /* Build configuration list for PBXProject "NetRate" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FDD3EA28A0B1309668A442B2 /* Debug */,
+				8DB23D5B0AA80A48AA651830 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AF2BFC1E22C948E184D480CF /* Build configuration list for PBXNativeTarget "NetRateSleepHelper" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				37BA4557F9B3495C87932CF4 /* Debug */,
+				D06CBCEC0A6249EC9B84960F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
 	};
-	rootObject = 244210E48437B6556980A702;
+	rootObject = 244210E48437B6556980A702 /* Project object */;
 }

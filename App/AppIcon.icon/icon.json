@@ -1,0 +1,16 @@
+{
+  "fill" : { "automatic-gradient" : "display-p3:0.04500,0.36000,0.42000,1.00000" },
+  "groups" : [
+    {
+      "name" : "Menu bar",
+      "layers" : [{ "image-name" : "MenuBar.svg", "name" : "Menu bar" }],
+      "shadow" : { "kind" : "layer-color", "opacity" : 0.35 }
+    },
+    {
+      "name" : "Extension",
+      "layers" : [{ "image-name" : "Extension.svg", "name" : "Extension" }],
+      "shadow" : { "kind" : "neutral", "opacity" : 0.4 }
+    }
+  ],
+  "supported-platforms" : { "squares" : ["macOS"] }
+}

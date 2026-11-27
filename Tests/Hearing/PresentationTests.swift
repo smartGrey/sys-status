@@ -1,3 +1,4 @@
+@testable import StatusBarCore
 import XCTest
 import Combine
 

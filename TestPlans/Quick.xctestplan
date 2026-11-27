@@ -1,0 +1,41 @@
+{
+  "configurations": [
+    {
+      "id": "3E4585B8-9356-48B1-9592-1BDC37099BAA",
+      "name": "macOS",
+      "options": {}
+    }
+  ],
+  "defaultOptions": {
+    "codeCoverage": false
+  },
+  "testTargets": [
+    {
+      "target": {
+        "containerPath": "container:NetRate.xcodeproj",
+        "identifier": "BA95863F21F825077995DD01",
+        "name": "NetRateTests"
+      },
+      "parallelizable": false,
+      "skippedTests": [
+        "ApplicationLifecycleTests",
+        "AudioCoreTests/testEngineStartsMutedAndInvalidDevicesFailSafely()",
+        "AudioCoreTests/testFiveMinuteClockDriftRemainsBounded()",
+        "FileToolTests/testBothMenuActionsOpenTheNativePicker()",
+        "FileToolTests/testMenuActionsSelectionCancellationAndResults()",
+        "FileToolTests/testResultPanelSelectionsFromMenu()",
+        "HearingIntegrationTests",
+        "MenuInteractionTests/testPrimaryDismissalClickSwitchesPanelOrReopensSecondaryMenu()",
+        "ProbeTransportTests",
+        "ShortcutTests/testSystemRegistrationIsExclusiveAndCanBeReacquired()",
+        "SiteEditorLayoutTests",
+        "SiteEditorTests",
+        "StopwatchIntegrationTests/testHotKeyRollsBackWhenSavingFails()",
+        "StopwatchIntegrationTests/testPanelEditingModeRejectionAndShortcutGuidance()",
+        "StopwatchIntegrationTests/testStatusItemWidthAndAccessiblePanelCommand()",
+        "StopwatchIntegrationTests/testSystemHotKeyConflictDuplicateRollbackAndRelease()"
+      ]
+    }
+  ],
+  "version": 1
+}

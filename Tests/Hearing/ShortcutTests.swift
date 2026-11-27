@@ -1,3 +1,4 @@
+@testable import StatusBarCore
 import XCTest
 import AppKit
 import Carbon
@@ -25,13 +26,13 @@ final class ShortcutTests: XCTestCase {
     private var first: ShortcutBinding { .init(keyCode: 4, modifiers: UInt32(controlKey | optionKey)) }
     private var second: ShortcutBinding { .init(keyCode: 40, modifiers: UInt32(controlKey | optionKey)) }
     func testValidationAndEncoding() throws {
-        XCTAssertNil(first.validationError)
-        XCTAssertNil(ShortcutBinding(keyCode: 90, modifiers: 0).validationError)
-        XCTAssertNotNil(ShortcutBinding(keyCode: 4, modifiers: 0).validationError)
-        XCTAssertNotNil(ShortcutBinding(keyCode: 4, modifiers: UInt32(shiftKey)).validationError)
-        XCTAssertNotNil(ShortcutBinding(keyCode: 63, modifiers: UInt32(cmdKey)).validationError)
-        XCTAssertNotNil(ShortcutBinding(keyCode: 12, modifiers: UInt32(cmdKey)).validationError)
-        XCTAssertNotNil(ShortcutBinding(keyCode: 4, modifiers: UInt32(alphaLock)).validationError)
+        XCTAssertNil(first.hearingValidationError)
+        XCTAssertNil(ShortcutBinding(keyCode: 90, modifiers: 0).hearingValidationError)
+        XCTAssertNotNil(ShortcutBinding(keyCode: 4, modifiers: 0).hearingValidationError)
+        XCTAssertNotNil(ShortcutBinding(keyCode: 4, modifiers: UInt32(shiftKey)).hearingValidationError)
+        XCTAssertNotNil(ShortcutBinding(keyCode: 63, modifiers: UInt32(cmdKey)).hearingValidationError)
+        XCTAssertNotNil(ShortcutBinding(keyCode: 12, modifiers: UInt32(cmdKey)).hearingValidationError)
+        XCTAssertNotNil(ShortcutBinding(keyCode: 4, modifiers: UInt32(alphaLock)).hearingValidationError)
         XCTAssertEqual(try JSONDecoder().decode(ShortcutBinding.self, from: JSONEncoder().encode(first)), first)
     }
     @MainActor func testRecordingConflictCancelAndClear() async {

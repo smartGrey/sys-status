@@ -1,0 +1,5 @@
+module NetRateNative {
+    header "../SiteProbing/HeaderSession.h"
+    header "../Hearing/AudioCore/HearingAudio.h"
+    export *
+}

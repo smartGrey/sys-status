@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="porcelain" x2=".35" y2="1">
+      <stop stop-color="#ffffff"/><stop offset="1" stop-color="#b8edf0"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#porcelain)" fill-rule="evenodd" d="M224 343h576a72 72 0 0 1 72 72v82a72 72 0 0 1-72 72H224a72 72 0 0 1-72-72v-82a72 72 0 0 1 72-72zm34 91a22 22 0 1 0 0 44 22 22 0 0 0 0-44zm74 0a22 22 0 1 0 0 44 22 22 0 0 0 0-44z"/>
+</svg>

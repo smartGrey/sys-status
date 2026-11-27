@@ -1,0 +1,30 @@
+{
+  "configurations": [
+    {
+      "id": "68FC745F-2E58-4437-8BD5-33773D3B88A0",
+      "name": "macOS",
+      "options": {}
+    }
+  ],
+  "defaultOptions": {
+    "codeCoverage": true,
+    "codeCoverageTargets": [
+      {
+        "containerPath": "container:NetRate.xcodeproj",
+        "identifier": "AD49525DA12890742EA8E805",
+        "name": "StatusBarCore"
+      }
+    ]
+  },
+  "testTargets": [
+    {
+      "target": {
+        "containerPath": "container:NetRate.xcodeproj",
+        "identifier": "BA95863F21F825077995DD01",
+        "name": "NetRateTests"
+      },
+      "parallelizable": false
+    }
+  ],
+  "version": 1
+}

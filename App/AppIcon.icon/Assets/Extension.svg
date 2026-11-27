@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="amber" x2=".4" y2="1">
+      <stop stop-color="#ffe795"/><stop offset="1" stop-color="#ff9b42"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#amber)" fill-rule="evenodd" d="M641 424h127a54 54 0 0 1 54 54v141a54 54 0 0 1-54 54H641a54 54 0 0 1-54-54V478a54 54 0 0 1 54-54zm12 173a11 11 0 0 0 0 22h103a11 11 0 0 0 0-22z"/>
+</svg>
