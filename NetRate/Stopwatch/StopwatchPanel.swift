@@ -72,7 +72,7 @@ final class StopwatchPanel {
         let bounds = screen.visibleFrame
         let size = content.update(presentation, availableWidth: bounds.width - 16, recording: recording,
                                   issues: shortcutIssues, hasSaveError: hasSaveError)
-        let frame = StatusHover.panelFrame(size: size, under: anchor, within: bounds.insetBy(dx: 8, dy: 0))
+        let frame = StatusPanelGeometry.frame(size: size, under: anchor, within: bounds.insetBy(dx: 8, dy: 0))
         if frame != window.frame { window.setFrame(frame, display: true) }
     }
 

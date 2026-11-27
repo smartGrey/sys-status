@@ -91,12 +91,13 @@ struct StopwatchShortcut: Codable, Hashable {
 }
 
 enum StopwatchHotKeyError: LocalizedError {
-    case invalid, duplicate, occupied
+    case invalid, duplicate, occupied, hearing
     case registration(OSStatus)
 
     var shortMessage: String {
         switch self {
         case .invalid: "请加修饰键或用 F 键"
+        case .hearing: "已用于环境音透传"
         case .duplicate: "快捷键重复"
         case .occupied: "快捷键已被占用"
         case .registration: "注册失败"
@@ -106,6 +107,7 @@ enum StopwatchHotKeyError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalid: "请用 ⌘、⌥ 或 ⌃ 组合按键，或使用功能键"
+        case .hearing: "已用于环境音透传"
         case .duplicate: "此快捷键已分配给另一项操作"
         case .occupied: "此快捷键已被系统或其他 App 占用"
         case .registration(let code): "系统未能注册快捷键（\(code)）"

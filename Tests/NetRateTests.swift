@@ -450,10 +450,10 @@ final class NetRateTests: XCTestCase {
             NSRect(x: -1920, y: 37, width: 1920, height: 1049)
         ] {
             let button = NSRect(x: screen.maxX - 64, y: screen.maxY + 4, width: 34, height: 22)
-            let panel = StatusHover.panelFrame(size: size, under: button, within: screen)
+            let panel = StatusPanelGeometry.frame(size: size, under: button, within: screen)
             XCTAssertTrue(screen.contains(panel))
             XCTAssertEqual(panel.maxX, screen.maxX)
-            XCTAssertEqual(panel.maxY, button.minY - 14)
+            XCTAssertEqual(panel.maxY, screen.maxY - 4)
         }
     }
 
@@ -1152,6 +1152,13 @@ final class NetRateTests: XCTestCase {
         try SiteProbeCommand(siteID: site.id, operation: .toggleSite).apply(to: &site)
         XCTAssertTrue(site.enabled)
         XCTAssertThrowsError(try SiteProbeCommand(siteID: site.id, operation: .disable(.fresh)).apply(to: &site))
+        SiteProbeCommand.refreshMenuItem(parent, for: site, available: true)
+        XCTAssertTrue(parent.submenu === children)
+        XCTAssertTrue(children.items.contains { $0 === balanced })
+        XCTAssertEqual(parent.state, .on)
+        XCTAssertEqual(balanced.state, .on)
+        XCTAssertEqual(balanced.view?.accessibilityValue() as? Int, 1)
+        XCTAssertEqual(children.item(withTitle: "启用此站点")?.view?.accessibilityValue() as? Int, 1)
         let checked = SiteProbeCommand.menuItem(for: site, target: self, action: selector)
         XCTAssertEqual(checked.state, .on)
         let lastStop = try XCTUnwrap(checked.submenu?.items.first { $0.accessibilityLabel() == "停止本站的新建探测" })

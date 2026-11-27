@@ -3,6 +3,7 @@ import CoreText
 
 @MainActor
 struct StatusFace {
+    static let moduleGap: CGFloat = 8
     private let digits: NSFont
     private let units: NSFont
     private let arrowColumn: CGFloat = 4

@@ -2,7 +2,6 @@ import AppKit
 
 @MainActor
 struct StopwatchStatusFace {
-    static let leadingGap: CGFloat = 8
     private static let gap: CGFloat = 3
     private static let padding: CGFloat = 5
     private static let height: CGFloat = 19
@@ -79,12 +78,13 @@ struct StopwatchStatusFace {
     }
 
     func combinedImage(with network: NSImage, focusAmounts: [CGFloat]? = nil) -> NSImage {
-        let size = NSSize(width: network.size.width + Self.leadingGap + width, height: network.size.height)
+        let gap = StatusFace.moduleGap
+        let size = NSSize(width: network.size.width + gap + width, height: network.size.height)
         let amounts = focusAmounts ?? self.focusAmounts
         return NSImage(size: size, flipped: false) { bounds in
             let networkBounds = NSRect(x: bounds.minX, y: bounds.minY, width: network.size.width, height: bounds.height)
             network.draw(in: networkBounds, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
-            drawLabels(at: networkBounds.maxX + Self.leadingGap, midY: bounds.midY, focusAmounts: amounts)
+            drawLabels(at: networkBounds.maxX + gap, midY: bounds.midY, focusAmounts: amounts)
             return true
         }
     }

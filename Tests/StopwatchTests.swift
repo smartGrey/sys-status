@@ -298,7 +298,8 @@ final class StopwatchIntegrationTests: XCTestCase {
 
         entry.updateStopwatch(nil)
         XCTAssertEqual(entry.item.length, original)
-        XCTAssertTrue(entry.item.menu === menu)
+        XCTAssertNil(entry.item.menu)
+        XCTAssertNotNil(button.action)
         XCTAssertTrue(button.accessibilityCustomActions()?.isEmpty ?? true)
         XCTAssertEqual(button.accessibilityLabel(), "网速")
     }

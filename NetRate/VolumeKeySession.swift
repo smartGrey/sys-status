@@ -32,6 +32,14 @@ final class VolumeKeySession: VolumeKeyListening, @unchecked Sendable {
     private var loop: CFRunLoop?
     @MainActor private var recoveries: [TimeInterval] = []
 
+    private static func deliver(_ event: VolumeKeySessionEvent,
+                                to notify: @escaping @MainActor @Sendable (VolumeKeySessionEvent) -> Void) {
+        // A native menu can track events in a nested run loop on the main thread.
+        RunLoop.main.perform(inModes: [.default, .eventTracking, .modalPanel]) {
+            MainActor.assumeIsolated { notify(event) }
+        }
+    }
+
     private final class Callback {
         let session: VolumeKeySession
         let notify: @MainActor @Sendable (VolumeKeySessionEvent) -> Void
@@ -43,7 +51,7 @@ final class VolumeKeySession: VolumeKeyListening, @unchecked Sendable {
 
         func receive(_ type: CGEventType, _ event: CGEvent) {
             if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-                DispatchQueue.main.async { [notify] in notify(.disabled) }
+                VolumeKeySession.deliver(.disabled, to: notify)
             } else {
                 session.lock.withLock {
                     if !session.stopped { VolumeEventFilter.transform(event) }
@@ -66,12 +74,12 @@ final class VolumeKeySession: VolumeKeyListening, @unchecked Sendable {
                         return Unmanaged.passUnretained(event)
                     }, userInfo: Unmanaged.passUnretained(context).toOpaque()
                 ) else {
-                    DispatchQueue.main.async { notify(.unavailable) }
+                    Self.deliver(.unavailable, to: notify)
                     return
                 }
                 defer { CFMachPortInvalidate(port) }
                 guard let source = CFMachPortCreateRunLoopSource(nil, port, 0) else {
-                    DispatchQueue.main.async { notify(.unavailable) }
+                    Self.deliver(.unavailable, to: notify)
                     return
                 }
                 let workerLoop = CFRunLoopGetCurrent()!
@@ -85,11 +93,11 @@ final class VolumeKeySession: VolumeKeyListening, @unchecked Sendable {
                 }
                 guard active else { return }
                 CFRunLoopPerformBlock(workerLoop, CFRunLoopMode.defaultMode.rawValue) { @Sendable in
-                    DispatchQueue.main.async { notify(.ready) }
+                    Self.deliver(.ready, to: notify)
                 }
                 CFRunLoopRun()
                 // Covers unexpected source invalidation as well as a normal stop.
-                DispatchQueue.main.async { notify(.unavailable) }
+                Self.deliver(.unavailable, to: notify)
             }
         }
         thread.name = "NetRate.VolumeKeys"

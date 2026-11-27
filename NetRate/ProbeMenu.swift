@@ -1,5 +1,19 @@
 import AppKit
 
+struct SiteMenuLayout: Equatable {
+    let id: String
+    let name: String
+    let lanes: [ProbeLane]
+    let personalStrengths: [[ProbeStrength]]
+
+    init(_ site: ProbeSite) {
+        id = site.id
+        name = site.name
+        lanes = site.lanes
+        personalStrengths = lanes.map { site[strength: $0].personal }
+    }
+}
+
 struct SiteProbeCommand {
     enum Operation { case toggleSite, disable(ProbeLane), select(ProbeLane, String) }
     let siteID: String
@@ -29,21 +43,19 @@ struct SiteProbeCommand {
     @MainActor static func menuItem(for site: ProbeSite, target: AnyObject, action: Selector) -> NSMenuItem {
         let parent = NSMenuItem(title: site.name, action: nil, keyEquivalent: "")
         parent.representedObject = site.id
-        parent.state = site.enabled ? .on : .off
         let menu = NSMenu(title: site.name)
         menu.autoenablesItems = false
         parent.submenu = menu
 
         func command(_ title: String, _ operation: Operation) -> NSMenuItem {
-            let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+            let item = StatusMenuToggleItem.make(title: title, action: action)
             item.target = target
             item.representedObject = SiteProbeCommand(siteID: site.id, operation: operation)
+            menu.addItem(item)
             return item
         }
-        let toggle = command("启用此站点", .toggleSite)
-        toggle.state = parent.state
-        toggle.isEnabled = site.enabled || site.hasEnabledLane
-        if !toggle.isEnabled { menu.addItem(.sectionHeader(title: "请先为一种探测方式选择强度")) }
+        _ = command("启用此站点", .toggleSite)
+        menu.addItem(.sectionHeader(title: "请先为一种探测方式选择强度"))
         for kind in site.lanes {
             let selection = site[strength: kind]
             menu.addItem(.separator())
@@ -54,19 +66,43 @@ struct SiteProbeCommand {
                 let budget = ProbeBudget(lane: kind, interval: values.interval, type: site.endpoint.type)
                 let item = command("\(strength.name) · \(values.interval) 秒　\(budget.display)",
                                    .select(kind, strength.id))
-                item.state = selection.enabled && strength.id == selection.selectedID ? .on : .off
                 item.toolTip = "\(values.warning) 秒提醒，\(values.cutoff) 秒截止，最多 \(values.capacity) 条在途。"
             }
             guard site.endpoint.type == .https else { continue }
             let stop = command("停止探测", .disable(kind))
-            let other: ProbeLane = kind == .daily ? .fresh : .daily
-            stop.state = selection.enabled ? .off : .on
-            stop.isEnabled = !selection.enabled || !site.enabled || site[strength: other].enabled
-            let description = "停止本站的" + kind.title + "探测"
-            stop.setAccessibilityLabel(description)
-            stop.toolTip = description + (stop.isEnabled ? "。" : "。暂停整站请取消勾选「启用此站点」。")
-            stop.setAccessibilityHelp(stop.toolTip)
+            stop.setAccessibilityLabel("停止本站的" + kind.title + "探测")
         }
+        refreshMenuItem(parent, for: site, available: true)
         return parent
+    }
+
+    @MainActor static func refreshMenuItem(_ parent: NSMenuItem, for site: ProbeSite, available: Bool) {
+        parent.state = site.enabled ? .on : .off
+        parent.isEnabled = available
+        guard let menu = parent.submenu else { return }
+        let canToggle = site.enabled || site.hasEnabledLane
+        menu.item(at: 1)?.isHidden = canToggle // The hint follows the site switch.
+        for item in menu.items {
+            guard let command = item.representedObject as? Self else { continue }
+            switch command.operation {
+            case .toggleSite:
+                item.state = parent.state
+                item.isEnabled = available && canToggle
+            case let .select(lane, id):
+                let selection = site[strength: lane]
+                item.state = selection.enabled && id == selection.selectedID ? .on : .off
+                item.isEnabled = available
+            case .disable(let lane):
+                let selection = site[strength: lane]
+                let other: ProbeLane = lane == .daily ? .fresh : .daily
+                let canStop = !selection.enabled || !site.enabled || site[strength: other].enabled
+                item.state = selection.enabled ? .off : .on
+                item.isEnabled = available && canStop
+                let description = "停止本站的" + lane.title + "探测"
+                item.toolTip = description + (canStop ? "。" : "。暂停整站请取消勾选「启用此站点」。")
+                item.setAccessibilityHelp(item.toolTip)
+            }
+            (item as? StatusMenuToggleItem)?.refreshRow()
+        }
     }
 }

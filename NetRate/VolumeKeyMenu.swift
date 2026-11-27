@@ -5,7 +5,7 @@ import AppKit
 final class VolumeKeyMenu: NSObject {
     private static let title = "音量键微调"
     private static let preference = "volumeKeyAdjustment"
-    let item = NSMenuItem(title: VolumeKeyMenu.title, action: nil, keyEquivalent: "")
+    let item = StatusMenuToggleItem.make(title: VolumeKeyMenu.title, action: nil)
     private let defaults: UserDefaults
     private let trusted: () -> Bool
     private let prompt: () -> Void
@@ -13,7 +13,7 @@ final class VolumeKeyMenu: NSObject {
     private let workspace: NotificationCenter
     private var session: VolumeKeyListening?
     private var healthTimer: Timer?
-    private var startupTimeout: DispatchWorkItem?
+    private var startupTimeout: Timer?
 
     init(defaults: UserDefaults = .standard,
          trusted: @escaping () -> Bool = { AXIsProcessTrusted() },
@@ -58,25 +58,24 @@ final class VolumeKeyMenu: NSObject {
         guard session == nil else { return }
         guard trusted() else {
             fail(.permission)
-            if interactive { prompt() }
+            if interactive { item.afterClosingMenu { [self] in prompt() } }
             return
         }
         let current = makeSession()
         session = current
         item.title = Self.title + "（正在开启…）"
         item.isEnabled = false
-        let timeout = DispatchWorkItem { [weak self, weak current] in
-            guard let self, let current, self.session === current else { return }
-            self.fail(.unavailable)
-        }
+        item.refreshRow()
+        let timeout = Timer(timeInterval: 5, target: self, selector: #selector(startupDidTimeOut(_:)),
+                            userInfo: nil, repeats: false)
         startupTimeout = timeout
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: timeout)
+        RunLoop.main.add(timeout, forMode: .common)
         current.start { [weak self, weak current] event in
             guard let self, let current, self.session === current else { return }
             switch event {
             case .ready:
                 guard self.checkHealth() else { return }
-                self.startupTimeout?.cancel()
+                self.startupTimeout?.invalidate()
                 self.startupTimeout = nil
                 self.beginMonitoring()
                 self.defaults.set("enabled", forKey: Self.preference)
@@ -87,6 +86,11 @@ final class VolumeKeyMenu: NSObject {
                 self.fail(self.trusted() ? .unavailable : .permission)
             }
         }
+    }
+
+    @objc private func startupDidTimeOut(_ timer: Timer) {
+        guard startupTimeout === timer else { return }
+        fail(.unavailable)
     }
 
     private func beginMonitoring() {
@@ -119,7 +123,7 @@ final class VolumeKeyMenu: NSObject {
         let current = session
         session = nil
         current?.stop()
-        startupTimeout?.cancel()
+        startupTimeout?.invalidate()
         startupTimeout = nil
         healthTimer?.invalidate()
         healthTimer = nil
@@ -132,5 +136,6 @@ final class VolumeKeyMenu: NSObject {
         item.isEnabled = true
         item.toolTip = failure?.help ?? "让音量加减键以更小的步长调节音量。"
         item.setAccessibilityHelp(item.toolTip)
+        item.refreshRow()
     }
 }

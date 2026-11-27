@@ -109,9 +109,9 @@ final class StatusHover {
     }
 
     private func layoutCard(under rect: NSRect, on screen: NSRect) {
-        let availableHeight = min(rect.minY - 14, screen.maxY) - screen.minY
+        let availableHeight = StatusPanelGeometry.top(under: rect, within: screen) - screen.minY
         let size = card.update(connectivity, availableHeight: availableHeight, availableWidth: screen.width)
-        panel?.setFrame(Self.panelFrame(size: size, under: rect, within: screen), display: true)
+        panel?.setFrame(StatusPanelGeometry.frame(size: size, under: rect, within: screen), display: true)
     }
 
     private func hoverFrame(button: NSRect, pointer: NSPoint, screen: NSScreen, event: CGEvent?) -> NSRect? {
@@ -179,12 +179,6 @@ final class StatusHover {
         panel.contentView = card
         self.panel = panel
         return panel
-    }
-
-    static func panelFrame(size: NSSize, under button: NSRect, within screen: NSRect) -> NSRect {
-        let x = min(max(button.midX - size.width / 2, screen.minX), screen.maxX - size.width)
-        let y = max(min(button.minY - 14, screen.maxY) - size.height, screen.minY)
-        return NSRect(x: x, y: y, width: size.width, height: size.height)
     }
 
     static func replicaFrame(of button: NSRect, from source: NSRect, to destination: NSRect,

@@ -22,12 +22,14 @@ final class StopwatchController {
     var enabled: Bool { state.settings.enabled }
     var panelVisibilityChanged: ((Bool) -> Void)?
     var handlePanelStatusClick: ((NSEvent) -> Bool)?
+    var hearingUsesShortcut: ((StopwatchShortcut) -> Bool)?
+    var interceptShortcut: ((StopwatchShortcut) -> Bool)?
     var statusEntryContains: ((NSPoint) -> Bool)?
 
     func isStatusEntry(at point: NSPoint) -> Bool { statusEntryContains?(point) == true }
 
-    lazy var menuItem: NSMenuItem = {
-        let item = NSMenuItem(title: "StopWatch", action: #selector(StopwatchMenuTarget.toggle(_:)), keyEquivalent: "")
+    lazy var menuItem: StatusMenuToggleItem = {
+        let item = StatusMenuToggleItem.make(title: "StopWatch", action: #selector(StopwatchMenuTarget.toggle(_:)))
         item.target = menuTarget
         return item
     }()
@@ -120,12 +122,23 @@ final class StopwatchController {
         return id
     }
 
+    func owner(of key: StopwatchShortcut) -> StopwatchAction? {
+        StopwatchAction.allCases.first { state.settings.shortcuts[$0] == key }
+    }
+
+    func receiveWhileRecording(_ key: StopwatchShortcut) -> Bool {
+        guard recording != nil else { return false }
+        panel.receiveRegisteredShortcut(key)
+        return true
+    }
+
     func record(_ action: StopwatchAction?) { recording = action }
 
     func replaceShortcut(_ action: StopwatchAction, with shortcut: StopwatchShortcut?) throws {
         guard enabled else { return }
         if let shortcut {
             guard shortcut.isValid else { throw StopwatchHotKeyError.invalid }
+            if hearingUsesShortcut?(shortcut) == true { throw StopwatchHotKeyError.hearing }
             guard !StopwatchAction.allCases.contains(where: { $0 != action && state.settings.shortcuts[$0] == shortcut })
             else { throw StopwatchHotKeyError.duplicate }
         }
@@ -155,10 +168,7 @@ final class StopwatchController {
 
     private func handleHotKey(_ action: StopwatchAction, shortcut: StopwatchShortcut) {
         guard enabled else { return }
-        if recording != nil {
-            panel.receiveRegisteredShortcut(shortcut)
-            return
-        }
+        if receiveWhileRecording(shortcut) || interceptShortcut?(shortcut) == true { return }
         switch action {
         case .toggle: toggle(state.settings.focus)
         case .switchFocus:
@@ -234,6 +244,7 @@ final class StopwatchController {
         } else if saveError != nil {
             "秒表数据尚未保存"
         } else { nil }
+        menuItem.refreshRow()
         panel.update(presentation, shortcutIssues: shortcutIssues, hasSaveError: saveError != nil)
         didUpdate?(enabled ? presentation : nil)
     }
@@ -242,8 +253,10 @@ final class StopwatchController {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = "\(error.localizedDescription)\n\(store.url.path(percentEncoded: false))"
-        NSApp.activate()
-        alert.runModal()
+        menuItem.afterClosingMenu {
+            NSApp.activate()
+            alert.runModal()
+        }
     }
 }
 
