@@ -171,6 +171,43 @@ enum ProbeEndpoint: Equatable {
         return nil
     }
 
+    static func parseHTTPS(_ input: String) throws -> URL {
+        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let authorityAndPath: Substring
+        if let scheme = text.range(of: #"^[A-Za-z][A-Za-z0-9+.-]*://"#, options: .regularExpression) {
+            guard text[scheme].lowercased() == "https://" else { throw SiteConfigurationError.unsupportedScheme }
+            authorityAndPath = text[scheme.upperBound...]
+        } else {
+            authorityAndPath = text[...]
+        }
+        let authority = authorityAndPath.prefix { !"/?#".contains($0) }
+        guard !authority.isEmpty else { throw SiteConfigurationError.missingHost }
+        guard !authority.contains("@"), !text.contains("#") else { throw SiteConfigurationError.privateAddress }
+        // Split the authority before parsing so a malformed or overflowing port is never silently discarded.
+        let portSuffix: Substring
+        if authority.first == "[" {
+            guard let end = authority.firstIndex(of: "]"),
+                  IPv6Address(String(authority[authority.index(after: authority.startIndex)..<end])) != nil
+            else { throw SiteConfigurationError.invalidAddress }
+            portSuffix = authority[authority.index(after: end)...]
+        } else {
+            let host = authority.prefix { $0 != ":" }
+            guard !host.isEmpty else { throw SiteConfigurationError.missingHost }
+            portSuffix = authority.dropFirst(host.count)
+        }
+        if !portSuffix.isEmpty {
+            let digits = portSuffix.dropFirst()
+            guard portSuffix.first == ":", !digits.isEmpty, digits.utf8.allSatisfy({ (48...57).contains($0) }),
+                  let port = UInt16(digits), port > 0 else { throw SiteConfigurationError.invalidPort }
+        }
+        guard let parts = URLComponents(string: "https://" + authorityAndPath),
+              let host = parts.host, (try? tcpHost(host)) != nil,
+              host == host.trimmingCharacters(in: .whitespacesAndNewlines),
+              parts.user == nil, parts.password == nil, parts.fragment == nil, let url = parts.url
+        else { throw SiteConfigurationError.invalidAddress }
+        return url
+    }
+
     static func tcpHost(_ input: String) throws -> String {
         var host = input.trimmingCharacters(in: .whitespacesAndNewlines)
         if host.contains(":") {
@@ -250,7 +287,10 @@ struct ProbeSite: Codable, Equatable, Identifiable {
         let type: ProbeSiteType = migrating || (version ?? 3) < 3 ? .https : try values.decode(ProbeSiteType.self, forKey: .type)
         let endpoint: ProbeEndpoint
         switch type {
-        case .https: endpoint = .https(try values.decode(URL.self, forKey: .url))
+        case .https:
+            let address = try values.decode(String.self, forKey: .url)
+            do { endpoint = .https(try ProbeEndpoint.parseHTTPS(address)) }
+            catch { throw DecodingError.dataCorruptedError(forKey: .url, in: values, debugDescription: error.localizedDescription) }
         case .tcp:
             let host = try values.decode(String.self, forKey: .host)
             endpoint = .tcp(host: try ProbeEndpoint.tcpHost(host), port: try values.decode(UInt16.self, forKey: .port))
@@ -311,11 +351,8 @@ struct ProbeSite: Codable, Equatable, Identifiable {
 
     static func custom(id: String = UUID().uuidString, name: String, address: String, enabled: Bool = true,
                        statusCodes: StatusCodes = StatusCodes()) throws -> Self {
-        guard let parts = URLComponents(string: address.trimmingCharacters(in: .whitespacesAndNewlines)),
-              parts.scheme?.lowercased() == "https", let host = parts.host, !host.isEmpty,
-              parts.user == nil, parts.password == nil, parts.fragment == nil, let url = parts.url else {
-            throw SiteConfigurationError.invalidAddress
-        }
+        let url = try ProbeEndpoint.parseHTTPS(address)
+        guard let host = url.host else { throw SiteConfigurationError.missingHost }
         let label = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return Self(id: id, name: label.isEmpty ? host : label, endpoint: .https(url), enabled: enabled,
                     statusCodes: statusCodes)
@@ -328,7 +365,7 @@ struct ProbeSite: Codable, Equatable, Identifiable {
 }
 
 enum SiteConfigurationError: LocalizedError {
-    case invalidAddress, invalidHost, invalidPort, invalidTCPLane
+    case unsupportedScheme, missingHost, privateAddress, invalidAddress, invalidHost, invalidPort, invalidTCPLane
     case invalidStatusCode, invalidNumber, shortDeadline, noLane
 
     var errorDescription: String? {
@@ -339,7 +376,10 @@ enum SiteConfigurationError: LocalizedError {
         case .invalidHost: "请输入主机名或 IP 地址，例如 nas。"
         case .invalidPort: "请输入 1–65535 之间的端口号。"
         case .invalidTCPLane: "TCP 端口只支持新建连接。请通过站点开关控制探测。"
-        case .invalidAddress: "请输入完整的 HTTPS 地址，地址中不能包含账号、密码或页面锚点。"
+        case .unsupportedScheme: "此站点类型仅支持 HTTPS。"
+        case .missingHost: "请填写站点的主机名或 IP 地址。"
+        case .privateAddress: "请移除地址中的账号、密码或页面锚点。"
+        case .invalidAddress: "请输入有效的 HTTPS 地址，例如 example.com/health。"
         case .invalidStatusCode: "请输入 200–599 或 2xx–5xx，多项用逗号分隔。"
         }
     }

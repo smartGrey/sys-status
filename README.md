@@ -8,7 +8,9 @@
 
 配置保存在 `~/Library/Application Support/NetRate/`。站点、秒表、环境音和音量键分别对应 `config.json`、`stopwatch.json`、`hearing.json` 和 `volume-keys.json`。
 
-手动修改站点配置后，在探测站点配置窗口选择「配置文件 → 重新读取配置」。
+HTTPS 站点可直接填写 `example.com/health`，TCP 站点分别填写主机和端口。手动修改站点配置后，在探测站点配置窗口选择「配置文件 → 重新读取配置」。
+
+鼠标移入网速浮窗可查看每种探测方式的在途请求和下次发起时间。点击「立即探测」可刷新已启用的方式。
 
 ## 构建与测试
 

@@ -28,7 +28,7 @@ final class HearingController: NSObject {
         do {
             try store.load()
             loadError = nil
-            if store.settings.enabled { activate() }
+            if store.settings.enabled { activate(feedback: nil) }
         } catch { loadError = error }
     }
 
@@ -42,10 +42,11 @@ final class HearingController: NSObject {
         // Stop immediately even if the disk can no longer save changes.
         if !enabled { stop() }
         try store.update { $0.enabled = enabled }
-        if enabled { activate() }
+        if enabled { activate(feedback: .menu) }
+        else { OperationFeedback.menu.show("监听环境音入口已关闭") }
     }
 
-    private func activate() {
+    private func activate(feedback: OperationFeedback?) {
         guard model == nil, pendingActivation == nil else { return }
         if let stopping {
             let token = UUID()
@@ -60,19 +61,20 @@ final class HearingController: NSObject {
                         guard let self, self.pendingActivation == token else { return }
                         self.stopping = nil
                         self.pendingActivation = nil
-                        self.startModel()
+                        self.startModel(feedback: feedback)
                     }
                 }
             }
         } else {
-            startModel()
+            startModel(feedback: feedback)
         }
     }
 
-    private func startModel() {
+    private func startModel(feedback: OperationFeedback?) {
         let shortcuts = HearingShortcutController(store: store, conflict: shortcutConflict)
         let model = HearingModel(store: store, shortcuts: shortcuts)
         self.model = model
+        model.panelFeedback = { [weak self] in OperationFeedback(screen: self?.panel?.operationScreen) }
         shortcuts.interceptToggle = { [weak self] binding in self?.interceptShortcut?(binding) == true }
         model.onStatusChange = { [weak self, weak model] in
             guard let self, let model, self.model === model else { return }
@@ -84,6 +86,7 @@ final class HearingController: NSObject {
         menuItem.isEnabled = true
         menuItem.refreshRow()
         didUpdate?(model.statusPresentation)
+        feedback?.show("监听环境音入口已开启")
     }
 
     func togglePanel(under anchor: NSRect, on screen: NSScreen) {

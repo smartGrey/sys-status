@@ -3,6 +3,26 @@ import XCTest
 @testable import StatusBarCore
 
 final class ProbeConfigurationTests: XCTestCase {
+    func testHTTPSInputAndConfigurationShareNormalization() throws {
+        for raw in ["nas", "example.com:8443/health?region=cn", "192.0.2.1/status", "[::1]:9443/ready",
+                    "example.com/path?next=https://example.org/ok"] {
+            let site = try ProbeSite.custom(name: "Test", address: " " + raw + " ")
+            XCTAssertEqual(site.endpoint.httpsURL?.absoluteString, "https://" + raw)
+            let config = ProbeConfiguration(probingEnabled: true, sites: ProbeSite.builtIns + [site])
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.withoutEscapingSlashes]
+            let data = try encoder.encode(config)
+            let shortened = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "\"https://" + raw + "\"", with: "\"" + raw + "\"")
+            XCTAssertNotEqual(Data(shortened.utf8), data)
+            XCTAssertEqual(try ProbeConfiguration.decode(Data(shortened.utf8)), config)
+        }
+        for raw in ["http://example.com", "ftp://host", "https:/broken", "/only-path", ":443/ready",
+                    "a:", "a:0", "a:65536", "a:abc", "a:999999999999999999999999", "user@host/path",
+                    "host#private", "weird host", "[not-ipv6]", "2001:db8::1"] {
+            XCTAssertThrowsError(try ProbeEndpoint.parseHTTPS(raw), raw)
+        }
+    }
+
     @MainActor
     func testMenuControlsStrengthWhilePausedAndProtectsLastLane() throws {
         var site = try ProbeSite.custom(name: "Example", address: "https://example.com", enabled: false)

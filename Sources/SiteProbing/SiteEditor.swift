@@ -153,7 +153,7 @@ final class SiteEditor: NSView {
             line.distribution = .fill
             control = line
         case .address:
-            let field = input(\.address, tcp ? "主机名或 IP" : "https://example.com/", topic: tcp ? .host : .address)
+            let field = input(\.address, tcp ? "主机名或 IP" : "example.com/health", topic: tcp ? .host : .address)
             fields[.address] = field
             control = field
         case .method where tcp:
@@ -203,6 +203,7 @@ final class SiteEditor: NSView {
         arrow?.state = draft.expanded ? .on : .off
         arrow?.setAccessibilityLabel("展开或折叠" + draft.title)
         if let addressField {
+            if addressField.stringValue != draft.form.address { addressField.stringValue = draft.form.address }
             let hint = (draft.source.endpoint.type == .tcp ? HelpField.host : .address).tip(readOnly: draft.source.isBuiltIn)
             addressField.toolTip = draft.form.address.isEmpty ? hint : draft.form.address + "\n" + hint
         }

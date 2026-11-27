@@ -70,6 +70,7 @@ final class StopwatchController {
         if enabled { registerSavedBindings() }
         commit(at: time)
         if let saveError { showError("无法保存 StopWatch 设置", error: saveError) }
+        else { OperationFeedback.menu.show(enabled ? "秒表入口已开启" : "秒表入口已关闭") }
     }
 
     func togglePanel(under anchor: NSRect, on screen: NSScreen) {
@@ -112,9 +113,29 @@ final class StopwatchController {
     func select(_ id: UUID) { change { state, _ in state.select(id) } }
     func rename(_ id: UUID, to name: String) { change { state, _ in state.rename(id, to: name) } }
     func remove(_ id: UUID) { change { state, _ in state.remove(id) } }
-    func reset(_ id: UUID) { change { state, _ in state.reset(id) } }
-    func setMode(_ mode: StopwatchMode) { change { state, _ in state.setMode(mode) } }
-    func toggle(_ id: UUID) { change { state, time in state.toggle(id, at: time) } }
+    private func name(for id: UUID) -> String {
+        guard let index = state.settings.entries.firstIndex(where: { $0.id == id }) else { return "秒表" }
+        let name = state.settings.entries[index].name
+        return name.isEmpty ? "第 \(index + 1) 个秒表" : name
+    }
+
+    func reset(_ id: UUID) {
+        if change({ state, _ in state.reset(id) }) { panel.feedback.show(name(for: id) + "已重置") }
+    }
+
+    func setMode(_ mode: StopwatchMode) {
+        let previous = state.settings.mode
+        if change({ state, _ in state.setMode(mode) }), state.settings.mode != previous {
+            panel.feedback.show(mode == .exclusive ? "计时模式已切换为互斥" : "计时模式已切换为并行")
+        }
+    }
+
+    func toggle(_ id: UUID, feedback: OperationFeedback? = nil) {
+        if change({ state, time in state.toggle(id, at: time) }),
+           let reading = presentation.readings.first(where: { $0.id == id }) {
+            (feedback ?? panel.feedback).show(name(for: id) + (reading.isRunning ? "已开始" : "已暂停"))
+        }
+    }
 
     func add() -> UUID? {
         guard let id = state.add() else { return nil }
@@ -170,21 +191,26 @@ final class StopwatchController {
         guard enabled else { return }
         if receiveWhileRecording(shortcut) || interceptShortcut?(shortcut) == true { return }
         switch action {
-        case .toggle: toggle(state.settings.focus)
+        case .toggle: toggle(state.settings.focus, feedback: .shortcut)
         case .switchFocus:
-            change { state, time in state.advance(at: time) }
+            if change({ state, time in state.advance(at: time) }) {
+                OperationFeedback.shortcut.show("已切换到" + name(for: state.settings.focus))
+            }
         }
     }
 
-    private func change(_ update: (inout StopwatchState, TimeInterval) -> Void) {
+    @discardableResult
+    private func change(_ update: (inout StopwatchState, TimeInterval) -> Void) -> Bool {
         let time = now()
         let previous = state
         update(&state, time)
         if state.needsSave(comparedTo: previous) {
             commit(at: time)
+            return saveError == nil
         } else if state != previous {
             publish(at: time)
         }
+        return false
     }
 
     private func commit(at time: TimeInterval) {

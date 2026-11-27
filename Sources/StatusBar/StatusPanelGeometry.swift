@@ -18,4 +18,12 @@ enum StatusPanelGeometry {
         return CGRect(x: min(max(origin, screen.minX), screen.maxX - width),
                       y: top - height, width: width, height: height)
     }
+
+    static func pinnedFrame(size: CGSize, previous: CGRect, within screen: CGRect) -> CGRect {
+        let width = min(size.width, screen.width)
+        let height = min(size.height, screen.height)
+        return CGRect(x: min(max(previous.minX, screen.minX), screen.maxX - width),
+                      y: min(max(previous.maxY - height, screen.minY), screen.maxY - height),
+                      width: width, height: height)
+    }
 }

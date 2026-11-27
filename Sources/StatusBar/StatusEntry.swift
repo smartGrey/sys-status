@@ -334,6 +334,7 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
         guard let menu, !removed, !trackingMenu, NSScreen.screens.contains(screen) else { return }
         pendingMenuOpen = nil
         trackingMenu = true
+        OperationFeedback.menuScreen = screen
         trackingMenuOnAnotherScreen = buttonLocation()?.screen != screen
         if let visiblePanel { onClosePanel?(visiblePanel) }
         synchronizeHighlight()

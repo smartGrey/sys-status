@@ -28,6 +28,8 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
         var next: TimeInterval = 0
         var issued = 0
         var evidence = 0
+        var latestCompletion = 0
+        var lastResult: ProbeResult?
         var session: Transport?
         var usage: ProbeUsage
         var history = ProbeHistory()
@@ -116,6 +118,45 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
         }
     }
 
+    var timingDidChange: (() -> Void)?
+    private var manualAvailableAt = TimeInterval.zero
+
+    // Only built for an open hover panel. Countdown and elapsed time use the same uptime as pump().
+    var timeline: ProbeTimeline {
+        var timeline = ProbeTimeline(manualAvailableAt: manualAvailableAt)
+        guard awake, enabled, networkDelay == nil else { return timeline }
+        let active = Dictionary(grouping: requests.values.filter { $0.lane.active && !$0.settled },
+                                by: { ObjectIdentifier($0.lane) })
+        for site in sites where site.settings.enabled {
+            for kind in site.settings.lanes where site.settings[kind].enabled {
+                let lane = site[kind]
+                let settings = site.settings[kind]
+                let starts = active[ObjectIdentifier(lane)]?.map(\.start).sorted() ?? []
+                timeline.lanes[site.settings.id, default: [:]][kind] = ProbeLaneTimeline(
+                    result: lane.lastResult, next: lane.next, settings: settings,
+                    full: (occupied[site.settings.id]?[kind] ?? 0) >= settings.capacity, starts: starts)
+            }
+        }
+        return timeline
+    }
+
+    @discardableResult
+    func probeNow() -> Bool {
+        let time = now()
+        guard awake, enabled, networkDelay == nil, time >= manualAvailableAt,
+              sites.contains(where: { $0.settings.enabled && $0.settings.hasEnabledLane }) else { return false }
+        manualAvailableAt = time + 3
+        let pending = Set(requests.values.filter { $0.lane.active && !$0.settled }.map { ObjectIdentifier($0.lane) })
+        for site in sites where site.settings.enabled {
+            for kind in site.settings.lanes where site.settings[kind].enabled {
+                let lane = site[kind]
+                if !pending.contains(ObjectIdentifier(lane)) { lane.next = time }
+            }
+        }
+        pump()
+        return true
+    }
+
     var state: ConnectivityState {
         let time = now()
         let rows = sites.map { site in
@@ -180,6 +221,7 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
     }
 
     private func reset() {
+        manualAvailableAt = 0
         networkDelay?.cancel()
         networkDelay = nil
         timer?.schedule(deadline: .distantFuture)
@@ -188,6 +230,7 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
             return Site(site.settings, at: now())
         }
         onChange()
+        timingDidChange?()
     }
 
     func networkDidChange() {
@@ -200,6 +243,7 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
             networkDelay = nil
             pump()
         }
+        timingDidChange?()
     }
 
     func apply(_ configuration: ProbeConfiguration) {
@@ -258,6 +302,7 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
             }
         }
         timer?.schedule(deadline: wake.isFinite ? .now() + max(0, wake - now()) : .distantFuture)
+        timingDidChange?()
     }
 
     private func launch(_ site: Site, kind: ProbeLane) -> Attempt {
@@ -363,9 +408,14 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
         attempt.settled = true
         let final: ProbeResult = time >= attempt.cutoff ? .timedOut : result
         if !final.isSuccess || time >= attempt.warning { retireConnection(of: attempt) }
+        if attempt.sequence >= attempt.lane.latestCompletion {
+            attempt.lane.latestCompletion = attempt.sequence
+            attempt.lane.lastResult = final
+        }
         attempt.lane.history.record(at: time, success: final.isSuccess)
         publish(final, for: attempt)
         onChange()
+        timingDidChange?()
     }
 
     private func receive(_ response: URLResponse?, for attempt: Attempt) {

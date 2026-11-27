@@ -4,6 +4,24 @@ import XCTest
 
 final class StatusPresentationTests: XCTestCase {
     @MainActor
+    func testFeedbackUsesOneCenteredClickThroughPanel() async throws {
+        let screen = try XCTUnwrap(NSScreen.screens.first)
+        let toast = OperationToast()
+        defer { toast.hide() }
+        let key = NSApp.keyWindow
+        toast.show("站点探测已启用", on: screen)
+        let panel = try XCTUnwrap(NSApp.windows.first { $0.title == "操作提示" && $0.isVisible })
+        toast.show("Google · 新建已切换为快速", on: screen)
+        XCTAssertEqual(NSApp.windows.filter { $0.title == "操作提示" && $0.isVisible }.count, 1)
+        XCTAssertEqual(panel.frame.midX, screen.frame.midX, accuracy: 1)
+        XCTAssertEqual(panel.frame.midY, screen.frame.midY, accuracy: 1)
+        XCTAssertTrue(panel.ignoresMouseEvents)
+        XCTAssertTrue(NSApp.keyWindow === key)
+        XCTAssertNotNil(view(try XCTUnwrap(panel.contentView)) { (field: NSTextField) in field.stringValue == "Google · 新建已切换为快速" })
+        try await waitUntil(timeout: .seconds(3)) { !panel.isVisible }
+    }
+
+    @MainActor
     func testStatusColorsAcrossAppearances() throws {
         let face = StatusFace()
         XCTAssertEqual(face.width, 34)
@@ -117,47 +135,203 @@ final class StatusPresentationTests: XCTestCase {
         XCTAssertEqual(button.accessibilityHelp(), state.summary)
         XCTAssertTrue(state.summary.contains(row.name + "，复用 132 ms，新建 非预期状态码 403"))
         XCTAssertTrue(state.summary.contains("复用成功率 100%，成功 7 次，完成 7 次，新建成功率 100%，成功 2 次，完成 2 次"))
-        let fields = try XCTUnwrap(card.contentView).subviews.compactMap { $0 as? NSTextField }
-        let percentages = fields.filter { $0.stringValue == "100" }.sorted { $0.frame.minX < $1.frame.minX }
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap { descendants($0) } }
+        func fields() -> [NSTextField] { descendants(card).compactMap { $0 as? NSTextField } }
+        let percentages = fields().filter { $0.stringValue == "100" }.sorted { $0.frame.minX < $1.frame.minX }
         XCTAssertEqual(percentages.count, 2)
         let dailyRate = try XCTUnwrap(percentages.first)
         let freshRate = try XCTUnwrap(percentages.last)
-        let slash = try XCTUnwrap(fields.first { $0.stringValue == "/" })
-        XCTAssertEqual(dailyRate.alignment, .right)
-        XCTAssertEqual(freshRate.alignment, .left)
+        let slashes = fields().filter { $0.stringValue == "/" }
+        XCTAssertEqual(slashes.count, 2)
+        let slash = try XCTUnwrap(slashes.last)
+        XCTAssertEqual(dailyRate.alignment, .center)
+        XCTAssertEqual(freshRate.alignment, .center)
         XCTAssertGreaterThanOrEqual(dailyRate.frame.width, dailyRate.intrinsicContentSize.width)
-        XCTAssertGreaterThanOrEqual(freshRate.frame.width, freshRate.intrinsicContentSize.width)
-        XCTAssertGreaterThan(slash.frame.width, slash.intrinsicContentSize.width)
-        XCTAssertGreaterThan(slash.frame.minX, dailyRate.frame.maxX)
-        XCTAssertEqual(slash.frame.minX - dailyRate.frame.maxX, freshRate.frame.minX - slash.frame.maxX)
-        XCTAssertEqual(card.update(state, availableHeight: 180, availableWidth: 320).width, 320)
-        let header = try XCTUnwrap(fields.first { $0.stringValue == "复用/新建请求成功率(%)" })
+        let header = try XCTUnwrap(fields().first { $0.stringValue == "成功率(%)" })
         XCTAssertEqual(header.maximumNumberOfLines, 1)
-        XCTAssertGreaterThanOrEqual(header.frame.width, header.intrinsicContentSize.width)
-        XCTAssertEqual(header.frame.maxX, freshRate.frame.maxX)
-        let fresh = try XCTUnwrap(fields.first { $0.stringValue == "新建" })
-        XCTAssertEqual(header.frame.minY, fresh.frame.minY)
-        XCTAssertGreaterThan(header.frame.minX, fresh.frame.maxX)
-        let name = try XCTUnwrap(fields.first { $0.stringValue == row.name })
-        XCTAssertEqual(name.accessibilityLabel(), row.spoken)
-        XCTAssertGreaterThan(size.width, 402)
-        let shorter = ConnectivityState.Row(id: "short", name: "Short", enabled: true,
-                                            freshCount: .init(successes: 97, completed: 100))
-        let zero = ConnectivityState.Row(id: "zero", name: "Zero", enabled: true,
-                                         dailyCount: .init(successes: 0, completed: 1))
-        _ = card.update(.init(rows: [row, shorter, zero]), availableHeight: 185, availableWidth: 320)
-        let rateFields = try XCTUnwrap(card.contentView).subviews.compactMap { $0 as? NSTextField }
-        func column(_ reference: NSTextField) -> [String] {
-            rateFields.filter { $0.frame.minX == reference.frame.minX && $0.frame.height == reference.frame.height }
-                .sorted { $0.frame.minY > $1.frame.minY }
-                .map(\.stringValue)
+        XCTAssertEqual(header.frame.midX, slash.frame.midX)
+        for (title, rate) in [("复用请求", dailyRate), ("新建请求", freshRate)] {
+            let subheading = try XCTUnwrap(fields().first { $0.stringValue == title })
+            XCTAssertEqual(subheading.frame.midX, rate.frame.midX)
+            XCTAssertGreaterThanOrEqual(subheading.frame.width, subheading.intrinsicContentSize.width)
         }
-        XCTAssertEqual(column(dailyRate), ["100", "—", "0"])
-        XCTAssertEqual(column(slash), ["/", "/", "/"])
-        XCTAssertEqual(column(freshRate), ["100", "97", "—"])
-        XCTAssertEqual(state.color, .red)
+        XCTAssertTrue(fields().contains { $0.stringValue == "网络状况" })
+        XCTAssertFalse(fields().contains { $0.stringValue == state.title })
+        XCTAssertEqual(fields().filter { $0.stringValue == "当前等待" }.count, 2)
+        let countdownHeadings = fields().filter { $0.stringValue == "下次发起" }.sorted { $0.frame.minX < $1.frame.minX }
+        let timingViews = descendants(card).compactMap { $0 as? ProbeTimingView }.sorted { $0.frame.minX < $1.frame.minX }
+        XCTAssertEqual(countdownHeadings.count, 2)
+        XCTAssertEqual(timingViews.count, 2)
+        for (heading, timing) in zip(countdownHeadings, timingViews) {
+            XCTAssertEqual(heading.frame.midX, timing.frame.minX + ProbeTimingView.nextContentRect.midX)
+        }
+        XCTAssertEqual(fields().first { $0.stringValue == row.name }?.accessibilityLabel(), row.spoken)
+        XCTAssertEqual(size.width, 886)
+
         let many = ConnectivityState(rows: Array(repeating: row, count: 15))
-        XCTAssertLessThanOrEqual(card.update(many, availableHeight: 185).height, 185)
+        let compact = card.update(many, availableHeight: 185, availableWidth: 320)
+        XCTAssertEqual(compact, NSSize(width: 320, height: 185))
+        let scrolls = descendants(card).compactMap { $0 as? NSScrollView }
+        XCTAssertTrue(scrolls.contains { $0.hasHorizontalScroller })
+        XCTAssertTrue(scrolls.contains { $0.hasVerticalScroller })
+        XCTAssertEqual(fields().filter { $0.stringValue == row.name }.count, 15)
+        XCTAssertEqual(fields().filter { $0.stringValue == "/" }.map(\.frame.minX), Array(repeating: slash.frame.minX, count: 16))
         XCTAssertEqual(size.width, card.update(many, availableHeight: 185).width)
+    }
+
+    @MainActor
+    func testHoverDwellRequiresPointerToRemainOverNetwork() async throws {
+        let screen = try XCTUnwrap(NSScreen.screens.first)
+        let entry = StatusEntry()
+        let hover = StatusHover(item: entry.item)
+        defer { hover.stop(); entry.removeForExit() }
+        let anchor = NSRect(x: screen.frame.midX, y: screen.visibleFrame.maxY, width: 40, height: 24)
+        let inside = NSPoint(x: anchor.midX, y: anchor.midY)
+        var pointer = inside
+        func schedule() { hover.schedulePresentation(under: anchor, within: screen.visibleFrame, pointerLocation: { pointer }) }
+        func visiblePanel() -> NSWindow? { NSApp.windows.first { $0.title == "网络状况" && $0.isVisible } }
+
+        schedule()
+        XCTAssertNil(visiblePanel())
+        pointer.x = anchor.maxX + 10
+        try await Task.sleep(for: .milliseconds(240))
+        XCTAssertNil(visiblePanel())
+
+        pointer = inside
+        schedule()
+        hover.setMenuOpen(true)
+        hover.setMenuOpen(false)
+        try await Task.sleep(for: .milliseconds(240))
+        XCTAssertNil(visiblePanel())
+
+        schedule()
+        try await waitUntil { visiblePanel()?.alphaValue == 1 }
+    }
+
+    @MainActor
+    func testPinnedHoverKeepsItsPositionAndAllowsBackgroundDrag() throws {
+        let screen = try XCTUnwrap(NSScreen.screens.first)
+        let bounds = screen.visibleFrame
+        let anchor = NSRect(x: bounds.midX, y: bounds.maxY, width: 40, height: 24)
+        let entry = StatusEntry()
+        let hover = StatusHover(item: entry.item)
+        defer { hover.stop(); entry.removeForExit() }
+        hover.resetPosition()
+        let row = ConnectivityState.Row(id: "site", name: "站点", enabled: true)
+        hover.update(.init(rows: [row]))
+        let key = NSApp.keyWindow
+        hover.show(under: anchor, within: screen.visibleFrame)
+        let panel = try XCTUnwrap(NSApp.windows.first { $0.title == "网络状况" && $0.isVisible })
+        let card = try XCTUnwrap(panel.contentView as? HoverCard)
+        let pin = try XCTUnwrap(view(card) { (button: NSButton) in button.toolTip == "固定在最前" })
+        let probe = try XCTUnwrap(view(card) { (button: NSButton) in button.title == "立即探测" })
+        XCTAssertFalse(panel.isMovable)
+        XCTAssertTrue(pin.acceptsFirstMouse(for: nil))
+        XCTAssertFalse(pin.isBordered)
+        let center = NSPoint(x: card.bounds.midX, y: card.bounds.midY)
+        XCTAssertTrue(card.canDrag(at: center))
+        pin.performClick(nil)
+        XCTAssertEqual(pin.state, .on)
+        XCTAssertTrue(pin.isBordered)
+        XCTAssertTrue(panel.isMovable)
+        XCTAssertGreaterThan(panel.level.rawValue, NSWindow.Level.normal.rawValue)
+        XCTAssertTrue(NSApp.keyWindow === key)
+        func hit(at point: NSPoint) -> NSView? {
+            card.hitTest(card.superview?.convert(point, from: nil) ?? point)
+        }
+        let dragTarget = try XCTUnwrap(hit(at: center))
+        XCTAssertTrue(dragTarget.acceptsFirstMouse(for: nil))
+        // Check AppKit's actual target across the full card, including inside the scrolling table.
+        for x in stride(from: 3.0, to: card.bounds.width, by: 13) {
+            for y in stride(from: 3.0, to: card.bounds.height, by: 13) {
+                let point = NSPoint(x: x, y: y)
+                if [pin, probe].contains(where: { $0.bounds.contains($0.convert(point, from: nil)) }) { continue }
+                XCTAssertTrue(card.canDrag(at: point))
+                XCTAssertTrue(hit(at: point) === dragTarget, "Different drag target at \(point)")
+            }
+        }
+        for title in ["网络状况", "下次发起", "站点", "预计探测流量 0 B/h"] {
+            let label = try XCTUnwrap(view(card) { (field: NSTextField) in field.stringValue == title })
+            let point = label.convert(NSPoint(x: label.bounds.midX, y: label.bounds.midY), to: nil)
+            XCTAssertTrue(hit(at: point) === dragTarget, title)
+        }
+        for button in [pin, probe] {
+            XCTAssertFalse(card.canDrag(at: button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)))
+        }
+
+        panel.setFrameOrigin(NSPoint(x: bounds.minX + 30, y: bounds.minY + 80))
+        let moved = panel.frame
+        hover.trackAnchor { _ in XCTFail("A pinned panel must not follow the menu bar"); return anchor }
+        hover.setMenuOpen(true)
+        hover.update(.init(rows: [row], rate: "10 KB/h"))
+        XCTAssertTrue(panel.isVisible)
+        XCTAssertEqual(panel.frame, moved)
+        hover.update(.init(rows: [row, row]))
+        XCTAssertEqual(panel.frame.minX, moved.minX)
+        XCTAssertEqual(panel.frame.maxY, moved.maxY)
+        pin.performClick(nil)
+        XCTAssertEqual(pin.state, .off)
+        XCTAssertFalse(pin.isBordered)
+        XCTAssertFalse(panel.isVisible)
+        XCTAssertFalse(panel.isMovable)
+    }
+
+    @MainActor
+    func testHoverBridgeAndButtonOnFirstClick() throws {
+        let anchor = NSRect(x: -180, y: 800, width: 40, height: 24)
+        let panel = NSRect(x: -790, y: 580, width: 780, height: 216)
+        XCTAssertTrue(StatusHover.retainsHover(at: .init(x: -170, y: 798), anchor: anchor, panel: panel))
+        XCTAssertTrue(StatusHover.retainsHover(at: .init(x: -20, y: 588), anchor: anchor, panel: panel))
+        XCTAssertFalse(StatusHover.retainsHover(at: .init(x: -30, y: 798), anchor: anchor, panel: panel))
+        let now = ProcessInfo.processInfo.systemUptime
+        let card = HoverCard()
+        let sites = [ConnectivityState.Row(id: "g", name: "Google", enabled: true,
+                                           dailyCount: .init(successes: 20, completed: 20),
+                                           freshCount: .init(successes: 8, completed: 10)),
+                     .init(id: "c", name: "Cursor", enabled: true, freshCount: .init(successes: 0, completed: 2)),
+                     .init(id: "n", name: "NAS", enabled: true, isTCP: true)]
+        let size = card.update(.init(rows: sites), availableHeight: 400)
+        let fast = ProbeLaneTimeline(result: .success(0.8), next: now + 3, settings: ProbeLane.fresh.defaults, full: true, starts: [now - 7, now - 1])
+        let slow = ProbeLaneTimeline(result: .success(0.801), next: now + 12, settings: ProbeLane.daily.defaults, full: false, starts: [])
+        let failed = ProbeLaneTimeline(result: .connectionRefused, next: now + 123, settings: ProbeLane.fresh.defaults, full: false, starts: [])
+        card.setTimeline(.init(lanes: ["g": [.fresh: fast, .daily: slow], "c": [.fresh: slow], "n": [.fresh: failed]]))
+        for value in ["0", "80", "801 ms", "连接被拒绝"] {
+            let field = try XCTUnwrap(view(card) { (field: NSTextField) in field.stringValue == value })
+            XCTAssertEqual(field.textColor, HoverPalette.warning, value)
+        }
+        for (value, color) in [("800 ms", NSColor.labelColor), ("100", .secondaryLabelColor)] {
+            let field = try XCTUnwrap(view(card) { (field: NSTextField) in field.stringValue == value })
+            XCTAssertEqual(field.textColor, color, value)
+        }
+        XCTAssertNotNil(view(card) { (field: NSTextField) in field.stringValue == "—" && field.textColor == .secondaryLabelColor })
+        XCTAssertNil(view(card) { (field: NSTextField) in field.stringValue == "—" && field.textColor == HoverPalette.warning })
+        XCTAssertNil(card.clock)
+        card.setVisible(true)
+        let clock = try XCTUnwrap(card.clock)
+        let button = try XCTUnwrap(card.contentView?.subviews.compactMap { $0 as? NSButton }.first)
+        var clicks = 0
+        card.probeNow = { clicks += 1 }
+        XCTAssertTrue(button.acceptsFirstMouse(for: nil))
+        XCTAssertTrue(button.isEnabled)
+        button.performClick(nil)
+        XCTAssertEqual(clicks, 1)
+        let window = NSPanel(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = card
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            card.setPinned(appearance == .darkAqua)
+            window.appearance = NSAppearance(named: appearance)
+            window.display()
+            let bitmap = try XCTUnwrap(card.bitmapImageRepForCachingDisplay(in: card.bounds))
+            card.cacheDisplay(in: card.bounds, to: bitmap)
+            let attachment = XCTAttachment(data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])), uniformTypeIdentifier: "public.png")
+            attachment.name = "probe-hover-" + appearance.rawValue
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        card.setVisible(false)
+        XCTAssertFalse(clock.isValid)
+        XCTAssertNil(card.clock)
+        card.setTimeline(.init())
+        XCTAssertFalse(button.isEnabled)
     }
 }

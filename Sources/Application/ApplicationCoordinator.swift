@@ -10,6 +10,7 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
     private let login = LoginItemMenu()
     private let systemSleep = SystemSleepMenu()
     private let volumeKeys: VolumeKeyMenu
+    private lazy var toast = OperationToast()
     private let fileTools = FileToolsMenu()
     private var latestSpeed: Speed?
     private var isTerminating = false
@@ -26,6 +27,7 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        OperationFeedback.deliver = { [weak self] message, screen in self?.toast.show(message, on: screen) }
         probes.load()
         probes.didUpdate = { [weak self] in
             guard let self else { return }
@@ -36,6 +38,9 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
             entry?.networkRegion(of: frame) ?? frame
         }, showsButtonTooltip: { [weak entry] in entry?.isSplit != true },
            menuIsOpening: { [weak entry] in entry?.isOpeningMenu == true })
+        hover.readTimeline = { [weak probes] in probes?.monitor.timeline ?? ProbeTimeline() }
+        hover.probeNow = { [weak probes] in _ = probes?.monitor.probeNow() }
+        probes.monitor.timingDidChange = { [weak self] in self?.hover.refreshTiming() }
         connectPanels(to: entry)
         connectShortcuts()
         let menu = NSMenu()
@@ -70,9 +75,9 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
 
     private func connectPanels(to entry: StatusEntry) {
         entry.onLayoutChange = { [weak self] in
-            self?.hover.resetPosition()
             DispatchQueue.main.async { [weak self] in
                 guard let self, !self.isTerminating else { return }
+                self.hover.trackAnchor { self.statusEntry.region(.network, on: $0) }
                 self.stopwatch.trackPanelAnchor { self.statusEntry.region(.stopwatch, on: $0) }
                 self.hearing.trackPanelAnchor { self.statusEntry.region(.hearing, on: $0) }
             }
@@ -174,6 +179,8 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !isTerminating else { return .terminateLater }
         isTerminating = true
+        OperationFeedback.deliver = nil
+        toast.hide()
         statusEntry.removeForExit()
         // Runtime cleanup must not resize or repaint the removed status item.
         hearing.didUpdate = nil

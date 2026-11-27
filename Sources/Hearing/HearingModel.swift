@@ -46,6 +46,7 @@ final class HearingModel: ObservableObject {
     private var previousOutputFrames: UInt64 = 0
     private var inputAliveAt = Date()
     private var outputAliveAt = Date()
+    var panelFeedback: () -> OperationFeedback = { OperationFeedback(screen: NSApp.keyWindow?.screen) }
     var onStatusChange: (() -> Void)?
 
     init(store: HearingStore, shortcuts: HearingShortcutController,
@@ -62,7 +63,7 @@ final class HearingModel: ObservableObject {
         self.backend = AudioBackend(handle: handle)
         shortcuts.onToggle = { [weak self] in
             guard let self else { return }
-            self.setEnabled(!self.preferences.enabled)
+            self.setEnabled(!self.preferences.enabled, feedback: .shortcut)
         }
     }
 
@@ -151,11 +152,11 @@ final class HearingModel: ObservableObject {
         rows += preferences.allowed.filter { !connected.contains($0.key) }
         return rows
     }
-    func setEnabled(_ enabled: Bool) {
-        guard !shuttingDown else { return }
+    func setEnabled(_ enabled: Bool, feedback: OperationFeedback? = nil) {
+        guard !shuttingDown, preferences.enabled != enabled else { return }
         preferences.enabled = enabled
         cancelCalibration(restore: false)
-        persist()
+        if persist() { (feedback ?? panelFeedback()).show(enabled ? "环境声透传开关已开启" : "环境声透传开关已关闭") }
         retryCount = 0
         if enabled {
             Task { @MainActor in
@@ -175,12 +176,18 @@ final class HearingModel: ObservableObject {
         persist()
     }
     func setAllowed(_ row: AllowedDevice, allowed: Bool) {
+        let previouslyAllowed = preferences.allowed.contains { $0.key == row.key }
         handle.mute()
         preferences.allowed.removeAll { $0.key == row.key }
         if allowed, catalog.outputs.contains(where: { $0.key == row.key && $0.supported }) {
             preferences.allowed.append(row)
         }
-        persist(); retryCount = 0; reconcile()
+        let isAllowed = preferences.allowed.contains { $0.key == row.key }
+        if persist(), isAllowed != previouslyAllowed {
+            panelFeedback().show(row.name + (isAllowed ? "已允许透传" : "已取消允许透传"))
+        }
+        retryCount = 0
+        reconcile()
     }
     func refresh() {
         guard !shuttingDown else { return }
@@ -249,10 +256,16 @@ final class HearingModel: ObservableObject {
         }
     }
     func dismissNotice() { notice = nil }
-    private func persist() {
-        guard !shuttingDown else { return }
-        do { try store.update { $0.audio = preferences } }
-        catch { notice = "环境音设置未能保存。" }
+    @discardableResult
+    private func persist() -> Bool {
+        guard !shuttingDown else { return false }
+        do {
+            try store.update { $0.audio = preferences }
+            return true
+        } catch {
+            notice = "环境音设置未能保存。"
+            return false
+        }
     }
     private func updateRememberedNames() {
         let previous = preferences.allowed

@@ -344,6 +344,7 @@ final class SiteSettingsWindow: NSWindowController, NSWindowDelegate, NSTableVie
             showFeedback(nil)
             updateRows()
             file.didReload()
+            OperationFeedback(screen: window?.screen).show("站点配置已重新读取")
             refreshActions()
         } catch {
             showConfigurationError(error)
@@ -379,11 +380,15 @@ final class SiteSettingsWindow: NSWindowController, NSWindowDelegate, NSTableVie
     }
 
     @objc private func saveChanges() {
-        if commitChanges() { close() }
+        let changed = dirty
+        if commitChanges() {
+            if changed { OperationFeedback(screen: window?.screen).show("站点配置已保存") }
+            close()
+        }
     }
 
     @objc private func applyChanges() {
-        if dirty { _ = commitChanges() }
+        if dirty, commitChanges() { OperationFeedback(screen: window?.screen).show("站点配置已应用") }
     }
 
     private func commitChanges() -> Bool {

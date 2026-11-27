@@ -83,6 +83,7 @@ final class SiteDraft {
 
     func markCommitted(_ site: ProbeSite) {
         source = site
+        if let url = site.endpoint.httpsURL { form.address = url.absoluteString }
         savedForm = form
     }
 
@@ -178,6 +179,6 @@ final class SiteDraft {
     var title: String {
         if !form.name.isEmpty { return form.name }
         if source.endpoint.type == .tcp, !form.address.isEmpty { return form.address }
-        return URLComponents(string: form.address)?.host ?? "新增站点"
+        return (try? ProbeEndpoint.parseHTTPS(form.address))?.host ?? "新增站点"
     }
 }

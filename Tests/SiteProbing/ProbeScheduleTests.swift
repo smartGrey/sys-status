@@ -4,6 +4,67 @@ import XCTest
 
 final class ProbeScheduleTests: XCTestCase {
     @MainActor
+    func testManualRefreshSharesScheduleAndCooldown() async throws {
+        var site = ProbeSite.builtIns[0]
+        site.daily = .init(interval: 10, warning: 5, cutoff: 10, capacity: 1)
+        site.fresh = .init(interval: 6, warning: 5, cutoff: 10, capacity: 2)
+        let h = ProbeHarness(sites: [site])
+        defer { h.stop() }
+        try await waitUntil { h.daily.count == 1 && h.fresh.count == 1 }
+        h.daily[0].reply(204)
+        try await waitUntil { h.monitor.timeline.lanes[site.id]?[.daily]?.full == false }
+        h.delay.time = 4
+        XCTAssertTrue(h.monitor.probeNow())
+        XCTAssertFalse(h.monitor.probeNow())
+        try await waitUntil { h.daily.count == 2 }
+        XCTAssertEqual(h.monitor.timeline.lanes[site.id]?[.daily]?.next, 14)
+        XCTAssertEqual(h.monitor.timeline.lanes[site.id]?[.fresh]?.next, 6)
+        h.advance(6)
+        try await waitUntil { h.fresh.count == 2 }
+        XCTAssertEqual(h.monitor.timeline.lanes[site.id]?[.fresh]?.starts, [0, 6])
+        h.delay.time = 6.25
+        h.fresh[1].reply(204)
+        try await waitUntil { h.monitor.timeline.lanes[site.id]?[.fresh]?.result == .success(0.25) }
+        XCTAssertEqual(h.monitor.timeline.lanes[site.id]?[.fresh]?.starts, [0])
+        h.advance(10)
+        XCTAssertEqual(h.monitor.timeline.lanes[site.id]?[.fresh]?.result, .success(0.25))
+        XCTAssertEqual(h.monitor.state.rows[0].freshCount, .init(successes: 1, completed: 2))
+        h.delay.time = 12
+        XCTAssertTrue(h.monitor.probeNow())
+        h.monitor.pump()
+        try await waitUntil { h.fresh.count == 3 }
+        XCTAssertEqual(h.monitor.timeline.lanes[site.id]?[.fresh]?.starts, [12])
+        h.monitor.setEnabled(false)
+        XCTAssertFalse(h.monitor.probeNow())
+        XCTAssertTrue(h.monitor.timeline.lanes.isEmpty)
+    }
+
+    @MainActor
+    func testManualRefreshHonorsCapacitySleepAndNetworkChanges() async throws {
+        var site = ProbeSite.builtIns[0]
+        site.daily.enabled = false
+        site.fresh = .init(interval: 2, warning: 5, cutoff: 8, capacity: 1)
+        let h = ProbeHarness(sites: [site])
+        defer { h.stop() }
+        h.advance(3)
+        XCTAssertTrue(h.monitor.probeNow())
+        let fresh = try XCTUnwrap(h.monitor.timeline.lanes[site.id]?[.fresh])
+        XCTAssertTrue(fresh.waitingForSlot(at: 3))
+        XCTAssertNil(h.monitor.timeline.lanes[site.id]?[.daily])
+        XCTAssertEqual(fresh.starts, [0])
+        h.monitor.networkDidChange()
+        XCTAssertFalse(h.monitor.probeNow())
+        try await waitUntil { !h.delay.completions.isEmpty }
+        h.delay.releaseFirst()
+        try await waitUntil { !h.monitor.timeline.lanes.isEmpty }
+        site.enabled = false
+        h.monitor.apply([site])
+        XCTAssertFalse(h.monitor.probeNow())
+        h.monitor.stop()
+        XCTAssertFalse(h.monitor.probeNow())
+    }
+
+    @MainActor
     func testFreshSoftDeadlineLateSuccessAndRecovery() async throws {
         let h = ProbeHarness()
         defer { h.stop() }

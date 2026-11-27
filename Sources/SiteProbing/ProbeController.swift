@@ -113,6 +113,16 @@ final class ProbeController: NSObject {
             try command.apply(to: &updated.sites[index])
             guard updated.sites[index] != previous else { return }
             try saveConfiguration(updated)
+            let site = updated.sites[index]
+            let message: String
+            switch command.operation {
+            case .toggleSite: message = site.name + (site.enabled ? "探测已启用" : "探测已暂停")
+            case .disable(let lane): message = site.name + " · " + lane.title + "探测已停止"
+            case .select(let lane, _):
+                let selected = site[strength: lane].selected(in: lane)
+                message = site.name + " · " + lane.title + "已切换为" + (selected?.name ?? "")
+            }
+            OperationFeedback.menu.show(message)
         } catch {
             showConfigurationError(error)
         }
@@ -124,6 +134,7 @@ final class ProbeController: NSObject {
         updated.probingEnabled.toggle()
         do {
             try saveConfiguration(updated)
+            OperationFeedback.menu.show(updated.probingEnabled ? "站点探测已启用" : "站点探测已暂停")
         } catch {
             showConfigurationError(error)
         }

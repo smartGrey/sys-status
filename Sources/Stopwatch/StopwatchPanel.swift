@@ -22,6 +22,7 @@ final class StopwatchPanel {
     private var sawModifier = false
     private var inputTimeout: Timer?
 
+    var feedback: OperationFeedback { OperationFeedback(screen: window?.screen) }
     var isVisible: Bool { window?.isVisible == true }
 
     init(controller: StopwatchController) { self.controller = controller }

@@ -107,6 +107,7 @@ struct ProbeConfiguration: Codable, Equatable {
                     }
                 } else {
                     if case let .https(url) = site.endpoint {
+                        guard url.scheme?.lowercased() == "https" else { throw SiteConfigurationError.invalidAddress }
                         _ = try ProbeSite.custom(id: site.id, name: site.name, address: url.absoluteString)
                     }
                     guard !site.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {

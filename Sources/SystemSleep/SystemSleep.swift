@@ -109,6 +109,7 @@ final class SystemSleepMenu {
         // Honor the action shown when the menu opened if another tool changed the setting meanwhile.
         refresh()
         guard item.isEnabled, requested != (item.state == .on) else { return }
+        let feedback = OperationFeedback.menu
         switching = true
         item.title = "禁用系统睡眠（正在切换…）"
         item.isEnabled = false
@@ -146,6 +147,8 @@ final class SystemSleepMenu {
             } else if let communicationError {
                 report(SleepNotice(title: actual ? "系统睡眠已禁用" : "系统睡眠已恢复",
                                    detail: "已从系统确认设置生效，无需重试。睡眠助手通信异常。\n\(communicationError.localizedDescription)"))
+            } else {
+                feedback.show(actual ? "系统睡眠已禁用" : "系统睡眠已恢复")
             }
         }
     }

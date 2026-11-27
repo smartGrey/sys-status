@@ -23,6 +23,7 @@ final class HearingPanelController: NSObject {
     private var contentWidth: CGFloat = 360
     private var lastContentSize = CGSize.zero
     var onVisibilityChange: ((Bool) -> Void)?
+    var operationScreen: NSScreen? { panel.screen }
     var isVisible: Bool { panel.isVisible }
 
     init(model: HearingModel) {

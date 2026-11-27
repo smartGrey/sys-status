@@ -59,6 +59,7 @@ final class VolumeKeyMenu: NSObject {
             stop()
             persist(VolumeKeySettings())
             display()
+            if storageError == nil { OperationFeedback.menu.show("音量键微调已关闭") }
         } else {
             enable(interactive: true)
         }
@@ -71,6 +72,7 @@ final class VolumeKeyMenu: NSObject {
             if interactive { item.afterClosingMenu { [self] in prompt() } }
             return
         }
+        let feedback = interactive ? OperationFeedback.menu : nil
         let current = makeSession()
         session = current
         item.title = Self.title + "（正在开启…）"
@@ -84,12 +86,13 @@ final class VolumeKeyMenu: NSObject {
             guard let self, let current, self.session === current else { return }
             switch event {
             case .ready:
-                guard self.checkHealth() else { return }
+                guard self.startupTimeout != nil, self.checkHealth() else { return }
                 self.startupTimeout?.invalidate()
                 self.startupTimeout = nil
                 self.beginMonitoring()
                 self.persist(VolumeKeySettings(enabled: true))
                 self.display()
+                if self.storageError == nil { feedback?.show("音量键微调已开启") }
             case .disabled:
                 _ = self.checkHealth()
             case .unavailable:

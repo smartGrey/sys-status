@@ -16,6 +16,10 @@ private final class LoginServiceFixture: LoginItemService {
 final class LoginItemTests: XCTestCase {
     @MainActor func testLoginSwitchTracksServiceApprovalAndErrors() throws {
         _ = NSApplication.shared
+        let previous = OperationFeedback.deliver
+        defer { OperationFeedback.deliver = previous }
+        var notices: [String] = []
+        OperationFeedback.deliver = { text, _ in notices.append(text) }
         let service = LoginServiceFixture()
         var opened = 0, failures = 0
         let menu = LoginItemMenu(service: service, openSettings: { opened += 1 }, report: { _ in failures += 1 })
@@ -34,5 +38,6 @@ final class LoginItemTests: XCTestCase {
         XCTAssertTrue(row.accessibilityPerformPress())
         XCTAssertEqual(opened, 1)
         XCTAssertEqual(menu.item.state, .mixed)
+        XCTAssertEqual(notices, ["登录时启动已开启", "登录时启动已关闭"])
     }
 }

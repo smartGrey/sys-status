@@ -38,12 +38,16 @@ final class LoginItemMenu: NSObject {
 
     @objc private func toggleLogin() {
         do {
-            switch service.status {
+            let previous = service.status
+            switch previous {
             case .enabled: try service.unregister()
             case .requiresApproval: item.afterClosingMenu(openSettings)
             default: try service.register()
             }
             refresh()
+            if previous != service.status, service.status == .enabled || service.status == .notRegistered {
+                OperationFeedback.menu.show(service.status == .enabled ? "登录时启动已开启" : "登录时启动已关闭")
+            }
         } catch {
             refresh()
             item.afterClosingMenu { [report] in report(error) }

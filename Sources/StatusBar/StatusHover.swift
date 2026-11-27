@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 
 @MainActor
 final class StatusHover {
@@ -14,7 +15,23 @@ final class StatusHover {
     private var menuIsOpen = false
     private var anchor: NSRect?
     private var panel: NSPanel?
-    private lazy var card = HoverCard()
+    private var isPinned: Bool { panel?.isMovable == true }
+    var readTimeline: () -> ProbeTimeline = { ProbeTimeline() }
+    var probeNow: (() -> Void)?
+    private var presentation: (anchor: NSRect, timer: Timer)?
+    private var dismissal: Timer?
+    private lazy var card: HoverCard = {
+        let card = HoverCard()
+        card.probeNow = { [weak self] in self?.probeNow?() }
+        card.togglePin = { [weak self] in self?.togglePin() }
+        card.beginDrag = { [weak self] in self?.pinPanel() }
+        return card
+    }()
+
+    func refreshTiming() {
+        guard anchor != nil else { return }
+        card.setTimeline(readTimeline())
+    }
 
     init(item: NSStatusItem, networkRegion: @escaping (NSRect) -> NSRect = { $0 },
          showsButtonTooltip: @escaping () -> Bool = { true }, menuIsOpening: @escaping () -> Bool = { false }) {
@@ -50,21 +67,37 @@ final class StatusHover {
     }
 
     func resetPosition() {
-        hide()
         screens = NSScreen.screens
         menuBarWindow = nil
-        updateButtonTooltip()
+        if isPinned {
+            layoutPinned(constrain: true)
+        } else {
+            hide()
+            updateButtonTooltip()
+        }
+    }
+
+    func trackAnchor(_ resolve: (NSScreen) -> NSRect?) {
+        guard !isPinned else { return }
+        cancelPresentation()
+        guard let anchor else { updateButtonTooltip(); return }
+        guard let screen = screens.first(where: { $0.frame.contains(anchor) }),
+              let rect = resolve(screen) else { hide(); return }
+        self.anchor = rect
+        layoutCard(under: rect, on: screen.visibleFrame)
     }
 
     func setMenuOpen(_ open: Bool) {
         menuIsOpen = open
-        if open { hide() }
+        if open && !isPinned { hide() }
     }
 
     func update(_ state: ConnectivityState) {
         guard connectivity != state else { return }
         connectivity = state
-        if anchor == nil {
+        if isPinned {
+            layoutPinned()
+        } else if anchor == nil {
             updateButtonTooltip()
         } else {
             if let anchor, let screen = screens.first(where: { $0.frame.contains(anchor) }) {
@@ -74,44 +107,145 @@ final class StatusHover {
     }
 
     private func handle(_ event: NSEvent) {
+        guard !isPinned else { return }
         if event.type == .mouseMoved {
             updatePosition(for: event.cgEvent)
-        } else {
+        } else if let panel, event.window === panel {
+            cancelDismissal()
+        } else if panel?.isVisible != true || panel?.frame.contains(NSEvent.mouseLocation) != true {
             hide()
         }
     }
 
+    static func retainsHover(at point: NSPoint, anchor: NSRect, panel: NSRect) -> Bool {
+        let bridge = NSRect(x: anchor.minX, y: panel.maxY, width: anchor.width,
+                            height: max(0, anchor.minY - panel.maxY))
+        return panel.contains(point) || bridge.contains(point)
+    }
+
+    private func cancelDismissal() {
+        dismissal?.invalidate()
+        dismissal = nil
+    }
+
+    private func deferDismissal() {
+        cancelPresentation()
+        guard anchor != nil, dismissal == nil else { return }
+        let timer = Timer(timeInterval: 0.18, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.hide() }
+        }
+        dismissal = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
     private func updatePosition(for event: CGEvent?) {
         let pointer = NSEvent.mouseLocation
+        if !menuIsOpen, !menuIsOpening(), let anchor, let panel,
+           Self.retainsHover(at: pointer, anchor: anchor, panel: panel.frame) {
+            cancelDismissal()
+            return
+        }
         // Most moves are outside the menu bar. Only resolve the button frame near the top of a screen.
         guard !menuIsOpen, !menuIsOpening(), let screen = screens.first(where: { $0.frame.contains(pointer) }),
               pointer.y >= screen.frame.maxY - 48,
               item.isVisible, let button = item.button, let window = button.window, window.isVisible else {
-            hide()
+            deferDismissal()
             return
         }
         let buttonFrame = window.convertToScreen(button.convert(button.bounds, to: nil))
         let visibleFrame = screen.visibleFrame
         guard let rect = hoverFrame(button: buttonFrame, pointer: pointer, screen: screen, event: event),
               rect.midY >= visibleFrame.maxY else {
-            hide()
+            deferDismissal()
             return
         }
 
+        if anchor == nil {
+            schedulePresentation(under: rect, within: visibleFrame)
+        } else {
+            show(under: rect, within: visibleFrame)
+        }
+    }
+
+    private func cancelPresentation() {
+        presentation?.timer.invalidate()
+        presentation = nil
+    }
+
+    func schedulePresentation(under rect: NSRect, within visibleFrame: NSRect,
+                              pointerLocation: @escaping @MainActor () -> NSPoint = { NSEvent.mouseLocation }) {
+        guard presentation?.anchor != rect else { return }
+        cancelPresentation()
+        let timer = Timer(timeInterval: 0.16, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.presentation = nil
+                guard !self.menuIsOpen, !self.menuIsOpening(), self.item.isVisible,
+                      rect.contains(pointerLocation()) else { return }
+                self.show(under: rect, within: visibleFrame)
+            }
+        }
+        presentation = (rect, timer)
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    func show(under rect: NSRect, within visibleFrame: NSRect) {
+        guard !isPinned else { return }
+        cancelPresentation()
+        cancelDismissal()
         guard anchor != rect else { return }
         let panel = panel ?? makePanel()
         layoutCard(under: rect, on: visibleFrame)
         if anchor == nil {
-            button.toolTip = nil
-            panel.orderFrontRegardless()
+            item.button?.toolTip = nil
+            card.setTimeline(readTimeline())
+            card.setVisible(true)
+            reveal(panel)
         }
         anchor = rect
+    }
+
+    private func reveal(_ panel: NSPanel) {
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        panel.alphaValue = reduceMotion ? 1 : 0.2
+        panel.orderFrontRegardless()
+        guard !reduceMotion else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.14
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = 1
+        }
+    }
+
+    private func togglePin() {
+        if isPinned {
+            hide()
+        } else {
+            pinPanel()
+        }
+    }
+
+    private func pinPanel() {
+        guard !isPinned, let panel, panel.isVisible else { return }
+        cancelDismissal()
+        panel.isMovable = true
+        card.setPinned(true)
+    }
+
+    private func layoutPinned(constrain: Bool = false) {
+        guard let panel, let screen = panel.screen ?? screens.first else { return }
+        let bounds = screen.visibleFrame
+        let size = card.update(connectivity, availableHeight: bounds.height, availableWidth: bounds.width)
+        guard constrain || panel.frame.size != size else { return }
+        let frame = StatusPanelGeometry.pinnedFrame(size: size, previous: panel.frame, within: bounds)
+        if panel.frame != frame { panel.setFrame(frame, display: true) }
     }
 
     private func layoutCard(under rect: NSRect, on screen: NSRect) {
         let availableHeight = StatusPanelGeometry.top(under: rect, within: screen) - screen.minY
         let size = card.update(connectivity, availableHeight: availableHeight, availableWidth: screen.width)
-        panel?.setFrame(StatusPanelGeometry.frame(size: size, under: rect, within: screen), display: true)
+        let frame = StatusPanelGeometry.frame(size: size, under: rect, within: screen)
+        if panel?.frame != frame { panel?.setFrame(frame, display: true) }
     }
 
     private func hoverFrame(button: NSRect, pointer: NSPoint, screen: NSScreen, event: CGEvent?) -> NSRect? {
@@ -159,18 +293,27 @@ final class StatusHover {
     }
 
     private func hide() {
+        cancelPresentation()
+        cancelDismissal()
         guard anchor != nil else { return }
+        card.setVisible(false)
+        panel?.isMovable = false
+        card.setPinned(false)
         anchor = nil
         panel?.orderOut(nil)
+        panel?.alphaValue = 1
         updateButtonTooltip()
     }
 
     private func makePanel() -> NSPanel {
         let panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
                             backing: .buffered, defer: false)
+        panel.title = "网络状况"
+        panel.isMovable = false
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
-        panel.ignoresMouseEvents = true
+        panel.acceptsMouseMovedEvents = true
+        panel.becomesKeyOnlyIfNeeded = true
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
         panel.isOpaque = false
@@ -187,144 +330,5 @@ final class StatusHover {
         let frame = button.offsetBy(dx: destination.maxX - source.maxX, dy: destination.maxY - source.maxY)
         guard destination.contains(frame), frame.minX >= (topRightArea ?? destination).minX else { return nil }
         return frame
-    }
-}
-
-@MainActor
-final class HoverCard: NSBox {
-    private let heading = NSTextField(labelWithString: "")
-    private let headers = ["站点", ProbeLane.daily.title, ProbeLane.fresh.title, "复用/新建请求成功率(%)"].map { NSTextField(labelWithString: $0) }
-    private let divider = NSBox()
-    private let footer = NSTextField(labelWithString: "")
-    private let overflow = NSTextField(labelWithString: "")
-    private struct Row {
-        let dot: NSImageView
-        let name: NSTextField
-        let daily: NSTextField
-        let fresh: NSTextField
-        let dailyRate: NSTextField
-        let separator: NSTextField
-        let freshRate: NSTextField
-
-        var views: [NSView] { [dot, name, daily, fresh, dailyRate, separator, freshRate] }
-    }
-
-    private var rows: [Row] = []
-    private static let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-    private static let percentWidth = ceil(("100" as NSString).size(withAttributes: [.font: valueFont]).width) + 4
-    private static let slashWidth: CGFloat = 12
-
-    init() {
-        super.init(frame: .zero)
-        boxType = .custom
-        titlePosition = .noTitle
-        cornerRadius = 12
-        borderWidth = 0.5
-        borderColor = .separatorColor
-        fillColor = .windowBackgroundColor
-        contentViewMargins = .zero
-        contentView = NSView()
-        heading.font = .systemFont(ofSize: 13, weight: .semibold)
-        divider.boxType = .separator
-        for label in headers + [footer, overflow] {
-            label.font = .systemFont(ofSize: 11)
-            label.textColor = .secondaryLabelColor
-            contentView?.addSubview(label)
-        }
-        for header in headers.dropFirst() { header.alignment = .right }
-        headers[3].maximumNumberOfLines = 1
-        contentView?.addSubview(heading)
-        contentView?.addSubview(divider)
-    }
-
-    required init?(coder: NSCoder) { nil }
-
-    private func addRow() {
-        let dot = NSImageView()
-        dot.symbolConfiguration = .init(pointSize: 7, weight: .regular)
-        let name = NSTextField(labelWithString: "")
-        name.font = .systemFont(ofSize: 12, weight: .medium)
-        name.lineBreakMode = .byTruncatingTail
-        func valueField(_ text: String = "", aligned alignment: NSTextAlignment = .right) -> NSTextField {
-            let field = NSTextField(labelWithString: text)
-            field.font = Self.valueFont
-            field.alignment = alignment
-            field.setAccessibilityElement(false)
-            return field
-        }
-        let separator = valueField("/", aligned: .center)
-        separator.textColor = .secondaryLabelColor
-        let row = Row(dot: dot, name: name, daily: valueField(), fresh: valueField(),
-                      dailyRate: valueField(), separator: separator, freshRate: valueField(aligned: .left))
-        for view in row.views { contentView?.addSubview(view) }
-        rows.append(row)
-    }
-
-    func update(_ state: ConnectivityState, availableHeight: CGFloat, availableWidth: CGFloat = .greatestFiniteMagnitude) -> NSSize {
-        let rateGap: CGFloat = 2
-        let rateWidth = max(ceil(headers[3].intrinsicContentSize.width) + 4,
-                            2 * Self.percentWidth + Self.slashWidth + 2 * rateGap)
-        let hasTCP = state.rows.contains(where: \.isTCP)
-        let freshWidth: CGFloat = hasTCP ? 84 : 61
-        let width = min(304 + rateWidth + freshWidth - 61, availableWidth)
-        let count = state.enabled ? state.rows.count : 0
-        let slots = max(1, Int((availableHeight - 91) / 22))
-        let visible = count > slots ? slots - 1 : count
-        let hidden = count - visible
-        let size = NSSize(width: width, height: count == 0 ? 65 : 91 + CGFloat(min(count, slots)) * 22)
-        heading.stringValue = state.title
-        heading.frame = NSRect(x: 14, y: size.height - 29, width: width - 28, height: 17)
-        footer.frame = NSRect(x: 14, y: 10, width: width - 28, height: 16)
-        footer.stringValue = state.footer
-        divider.frame = NSRect(x: 14, y: 32, width: width - 28, height: 1)
-        let rateX = width - 14 - rateWidth
-        let freshRateX = width - 14 - Self.percentWidth
-        let slashX = freshRateX - rateGap - Self.slashWidth
-        let dailyRateX = slashX - rateGap - Self.percentWidth
-        // Leave room for a recognizable site name when the visible screen is narrow.
-        let latencyWidth = min(61, max(48, floor((rateX - 90) / 2)))
-        let freshColumnWidth = latencyWidth + freshWidth - 61
-        let freshX = rateX - 4 - freshColumnWidth
-        let dailyX = freshX - 4 - latencyWidth
-        let columns: [(x: CGFloat, width: CGFloat)] = [(14, max(0, dailyX - 18)), (dailyX, latencyWidth),
-                                                       (freshX, freshColumnWidth), (rateX, rateWidth)]
-        for (index, column) in columns.enumerated() {
-            headers[index].isHidden = count == 0
-            headers[index].frame = NSRect(x: column.x, y: size.height - 51, width: column.width,
-                                          height: 15)
-        }
-        overflow.isHidden = hidden == 0
-        overflow.stringValue = "另有 \(hidden) 个站点"
-        overflow.frame = NSRect(x: 14, y: 40, width: width - 28, height: 16)
-        while rows.count < visible { addRow() }
-        while rows.count > visible {
-            let row = rows.removeLast()
-            for view in row.views { view.removeFromSuperview() }
-        }
-        for (index, site) in state.rows.prefix(visible).enumerated() {
-            let row = rows[index]
-            let y = size.height - 75 - CGFloat(index) * 22
-            row.dot.image = NSImage(systemSymbolName: site.enabled ? "circle.fill" : "circle", accessibilityDescription: nil)
-            row.dot.contentTintColor = switch site.color {
-            case .normal: .tertiaryLabelColor
-            case .green: .systemGreen
-            case .orange: .systemOrange
-            case .red: .systemRed
-            }
-            row.dot.frame = NSRect(x: 14, y: y + 3, width: 10, height: 10)
-            row.name.frame = NSRect(x: 30, y: y, width: max(0, dailyX - 34), height: 17)
-            row.name.stringValue = site.name
-            row.name.setAccessibilityLabel(site.spoken)
-            row.daily.frame = NSRect(x: dailyX, y: y, width: latencyWidth, height: 17)
-            row.fresh.frame = NSRect(x: freshX, y: y, width: freshColumnWidth, height: 17)
-            row.dailyRate.frame = NSRect(x: dailyRateX, y: y, width: Self.percentWidth, height: 17)
-            row.separator.frame = NSRect(x: slashX, y: y, width: Self.slashWidth, height: 17)
-            row.freshRate.frame = NSRect(x: freshRateX, y: y, width: Self.percentWidth, height: 17)
-            row.daily.stringValue = site.text(for: .daily)
-            row.fresh.stringValue = site.text(for: .fresh)
-            row.dailyRate.stringValue = site.percentage(for: .daily)
-            row.freshRate.stringValue = site.percentage(for: .fresh)
-        }
-        return size
     }
 }

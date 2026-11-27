@@ -31,7 +31,7 @@ enum HelpField: String, CaseIterable {
             return FieldHelp("给站点起一个容易辨认的名字。留空会使用主机名。",
                              "例如给工作服务取名「办公入口」，悬停时就能找到它。仅改名称会保留近期结果。", .history)
         case .address:
-            return FieldHelp("填写要检测的完整 HTTPS 地址，探测只检查原地址的直接响应。",
+            return FieldHelp("填写主机名或 HTTPS 地址，例如 example.com/health。省略协议时使用 HTTPS。",
                              "可包含路径和查询参数。请去掉网址中的账号、密码和 # 后的页面锚点。", .history)
         case .host:
             return FieldHelp("填写服务的主机名或 IP 地址，例如 nas。", "优先直连，按 Mac 当前的名称解析和路由连接目标。访问 Tailscale 设备时，可填写 Finder 使用的主机名。", .history)

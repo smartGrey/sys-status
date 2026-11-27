@@ -164,9 +164,9 @@ final class SiteEditorTests: XCTestCase {
         _ = hover.update(h.monitor.state, availableHeight: 240)
         let hoverContent = try XCTUnwrap(hover.contentView)
         let expectedNames = expected.map(\.name)
-        let names = hoverContent.subviews.compactMap { $0 as? NSTextField }
-            .filter { expectedNames.contains($0.stringValue) }
-            .sorted { $0.frame.minY > $1.frame.minY }
+        let names = try expectedNames.map { name in
+            try XCTUnwrap(view(hoverContent) { (label: NSTextField) in label.stringValue == name })
+        }.sorted { $0.convert($0.bounds, to: hoverContent).midY > $1.convert($1.bounds, to: hoverContent).midY }
         XCTAssertEqual(names.map(\.stringValue), expectedNames)
     }
 
