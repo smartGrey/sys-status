@@ -3,6 +3,8 @@ import AppKit
 @MainActor
 final class StatusHover {
     private let item: NSStatusItem
+    private let networkRegion: (NSRect) -> NSRect
+    private let showsButtonTooltip: () -> Bool
     private var globalMonitor: Any?
     private var localMonitor: Any?
     private var screens: [NSScreen] = []
@@ -13,9 +15,16 @@ final class StatusHover {
     private var panel: NSPanel?
     private lazy var card = HoverCard()
 
-    init(item: NSStatusItem) {
+    init(item: NSStatusItem, networkRegion: @escaping (NSRect) -> NSRect = { $0 },
+         showsButtonTooltip: @escaping () -> Bool = { true }) {
         self.item = item
-        item.button?.toolTip = connectivity.hoverTooltip
+        self.networkRegion = networkRegion
+        self.showsButtonTooltip = showsButtonTooltip
+        updateButtonTooltip()
+    }
+
+    private func updateButtonTooltip() {
+        item.button?.toolTip = showsButtonTooltip() ? connectivity.hoverTooltip : nil
     }
 
     func start() {
@@ -42,6 +51,7 @@ final class StatusHover {
         hide()
         screens = NSScreen.screens
         menuBarWindow = nil
+        updateButtonTooltip()
     }
 
     func setMenuOpen(_ open: Bool) {
@@ -53,7 +63,7 @@ final class StatusHover {
         guard connectivity != state else { return }
         connectivity = state
         if anchor == nil {
-            item.button?.toolTip = state.hoverTooltip
+            updateButtonTooltip()
         } else {
             if let anchor, let screen = screens.first(where: { $0.frame.contains(anchor) }) {
                 layoutCard(under: anchor, on: screen.visibleFrame)
@@ -103,17 +113,22 @@ final class StatusHover {
     }
 
     private func hoverFrame(button: NSRect, pointer: NSPoint, screen: NSScreen, event: CGEvent?) -> NSRect? {
+        let frame: NSRect
         if screen.frame.contains(button) {
-            return button.contains(pointer) ? button : nil
+            frame = button
+        } else {
+            // AppKit reports the active menu bar's button. Project its trailing
+            // position onto the inactive bar, then apply the same region check.
+            guard NSScreen.screensHaveSeparateSpaces, let event,
+                  let source = screens.first(where: { $0.frame.contains(button) }),
+                  let projected = Self.replicaFrame(of: button, from: source.frame, to: screen.frame,
+                                                   topRightArea: screen.auxiliaryTopRightArea),
+                  projected.contains(pointer), isOverMenuBar(event, screen: screen.frame)
+            else { return nil }
+            frame = projected
         }
-        // AppKit reports the active menu bar's button. The other menu bars share its trailing layout.
-        guard NSScreen.screensHaveSeparateSpaces, let event,
-              let source = screens.first(where: { $0.frame.contains(button) }),
-              let projected = Self.replicaFrame(of: button, from: source.frame, to: screen.frame,
-                                               topRightArea: screen.auxiliaryTopRightArea),
-              projected.contains(pointer), isOverMenuBar(event, screen: screen.frame)
-        else { return nil }
-        return projected
+        let network = networkRegion(frame)
+        return network.contains(pointer) ? network : nil
     }
 
     private func isOverMenuBar(_ event: CGEvent, screen: NSRect) -> Bool {
@@ -145,13 +160,13 @@ final class StatusHover {
         guard anchor != nil else { return }
         anchor = nil
         panel?.orderOut(nil)
-        item.button?.toolTip = connectivity.hoverTooltip
+        updateButtonTooltip()
     }
 
     private func makePanel() -> NSPanel {
         let panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
                             backing: .buffered, defer: false)
-        panel.level = .statusBar
+        panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
         panel.ignoresMouseEvents = true
         panel.hidesOnDeactivate = false

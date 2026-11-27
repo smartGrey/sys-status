@@ -13,8 +13,8 @@ private final class SamplingSession: @unchecked Sendable {
 @main
 @MainActor
 final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    private var face = StatusFace()
-    private var item: NSStatusItem!
+    private lazy var statusEntry = StatusEntry()
+    private let stopwatch = StopwatchController()
     private var hover: StatusHover!
     private let configurationStore = ProbeConfigurationStore()
     private var configurationError: Error?
@@ -53,11 +53,25 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } catch {
             configurationError = error
         }
-        // The menu bar on this Mac adds its own horizontal padding to the button.
-        item = NSStatusBar.system.statusItem(withLength: face.width)
-        item.autosaveName = "NetRate"
-        item.button?.setAccessibilityLabel("网速")
-        hover = StatusHover(item: item)
+        let entry = statusEntry
+        hover = StatusHover(item: entry.item, networkRegion: { [weak entry] frame in
+            entry?.networkRegion(of: frame) ?? frame
+        }, showsButtonTooltip: { [weak entry] in entry?.isSplit != true })
+        entry.onLayoutChange = { [weak self] in
+            self?.hover.resetPosition()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.stopwatch.trackPanelAnchor(self.statusEntry.stopwatchRegion(on:))
+            }
+        }
+        entry.onCloseStopwatch = { [weak stopwatch] in stopwatch?.closePanel() }
+        entry.onToggleStopwatch = { [weak stopwatch] anchor, screen in
+            stopwatch?.togglePanel(under: anchor, on: screen)
+        }
+        stopwatch.statusEntryContains = { [weak entry] in entry?.containsButton(at: $0) == true }
+        stopwatch.handlePanelStatusClick = { [weak entry] in entry?.handlePanelStatusClick($0) == true }
+        stopwatch.panelVisibilityChanged = { [weak entry] in entry?.panelVisibilityChanged($0) }
+        stopwatch.didUpdate = { [weak entry] in entry?.updateStopwatch($0) }
         let menu = NSMenu()
         menu.autoenablesItems = false
         menu.delegate = self
@@ -74,15 +88,18 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         fileTools.add(to: menu)
         menu.addItem(.separator())
+        menu.addItem(stopwatch.menuItem)
+        menu.addItem(.separator())
         loginItem = menu.addItem(withTitle: "登录时启动", action: #selector(toggleLogin), keyEquivalent: "")
         loginItem.target = self
         let quit = menu.addItem(withTitle: "退出", action: #selector(quitApp), keyEquivalent: "q")
         quit.target = self
         refreshSiteMenu(menu)
-        item.button?.menu = menu
-        item.menu = menu
+        entry.installMenu(menu)
+        stopwatch.restore()
         let center = NSWorkspace.shared.notificationCenter
-        center.addObserver(self, selector: #selector(stopSampling), name: NSWorkspace.willSleepNotification, object: nil)
+        center.addObserver(self, selector: #selector(systemWillSleep), name: NSWorkspace.willSleepNotification, object: nil)
+        center.addObserver(self, selector: #selector(systemWillPowerOff), name: NSWorkspace.willPowerOffNotification, object: nil)
         center.addObserver(self, selector: #selector(startSampling), name: NSWorkspace.didWakeNotification, object: nil)
         center.addObserver(self, selector: #selector(resetHoverPosition),
                            name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
@@ -145,15 +162,23 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
         latestSpeed = speed
         var state = connectivity.state
         if configurationError != nil { state.configurationUnavailable = true }
-        if let button = item.button {
-            face.update(button, speed: speed, connectivity: state)
-        }
+        statusEntry.updateNetwork(speed: speed, connectivity: state)
         hover.update(state)
     }
 
-    func applicationDidChangeScreenParameters(_ notification: Notification) { hover?.resetPosition() }
+    @objc private func systemWillSleep() {
+        stopwatch.pauseForSystemSleep()
+        stopSampling()
+    }
 
-    @objc private func resetHoverPosition() { hover.resetPosition() }
+    @objc private func systemWillPowerOff() { stopwatch.pauseForSystemSleep() }
+
+    func applicationDidChangeScreenParameters(_ notification: Notification) { resetHoverPosition() }
+
+    @objc private func resetHoverPosition() {
+        hover?.resetPosition()
+        stopwatch.closePanel()
+    }
 
     private func refreshSiteMenu(_ menu: NSMenu) {
         for entry in menu.items where entry.representedObject is String && entry.hasSubmenu {
@@ -269,10 +294,11 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func quitApp() { NSApp.terminate(nil) }
 
     func applicationWillTerminate(_ notification: Notification) {
+        stopwatch.stopForExit()
         volumeKeys.stop()
         if let networkStore { SCDynamicStoreSetDispatchQueue(networkStore, nil) }
         stopSampling()
         NSWorkspace.shared.notificationCenter.removeObserver(self)
-        NSStatusBar.system.removeStatusItem(item)
+        NSStatusBar.system.removeStatusItem(statusEntry.item)
     }
 }

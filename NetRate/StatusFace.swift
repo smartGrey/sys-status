@@ -19,20 +19,29 @@ struct StatusFace {
         width = numberEnd + gap + ceil(("M" as NSString).size(withAttributes: [.font: units]).width)
     }
 
-    mutating func update(_ button: NSButton, speed: Speed?, connectivity: ConnectivityState) {
+    private(set) var renderedImage: NSImage?
+    private(set) var accessibilityHelp = ""
+    private(set) var accessibilityValue = ""
+
+    @discardableResult
+    mutating func update(speed: Speed?, connectivity: ConnectivityState) -> Bool {
         let up = RateText(speed?.upload), down = RateText(speed?.download)
         let ratesChanged = displayed != [up, down]
-        guard ratesChanged || displayedConnectivity != connectivity else { return }
-        if ratesChanged || displayedConnectivity?.color != connectivity.color {
-            button.image = image(upload: up, download: down, color: connectivity.color)
-        }
+        guard ratesChanged || displayedConnectivity != connectivity else { return false }
+        let imageChanged = ratesChanged || displayedConnectivity?.color != connectivity.color
+        if imageChanged { renderedImage = image(upload: up, download: down, color: connectivity.color) }
         let summary = connectivity.summary
-        if displayedConnectivity != connectivity {
-            button.setAccessibilityHelp(summary)
-        }
-        button.setAccessibilityValue("上行" + up.spoken + "，下行" + down.spoken + "，" + summary)
+        accessibilityHelp = summary
+        accessibilityValue = "上行" + up.spoken + "，下行" + down.spoken + "，" + summary
         displayed = [up, down]
         displayedConnectivity = connectivity
+        return imageChanged
+    }
+
+    mutating func update(_ button: NSButton, speed: Speed?, connectivity: ConnectivityState) {
+        if update(speed: speed, connectivity: connectivity) { button.image = renderedImage }
+        button.setAccessibilityHelp(accessibilityHelp)
+        button.setAccessibilityValue(accessibilityValue)
     }
 
     func image(upload: RateText, download: RateText, color: ArrowColor) -> NSImage {
