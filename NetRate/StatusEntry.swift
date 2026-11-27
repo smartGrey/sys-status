@@ -6,8 +6,12 @@ final class StatusEntry: NSObject {
     let item: NSStatusItem
     private var face = StatusFace()
     private var watch: StopwatchStatusFace?
+    private var focusTransition: StopwatchStatusFace.FocusTransition?
+    private var focusTimer: Timer?
     private var menu: NSMenu?
     private var trackingMenu = false
+    private var pendingMenuOpen: UUID?
+    private var secondaryMenuClick: NSEvent?
     private var showPanelAfterMenu = false
     private var panelVisible = false
     var onLayoutChange: (() -> Void)?
@@ -23,6 +27,7 @@ final class StatusEntry: NSObject {
     }
 
     var isSplit: Bool { watch != nil }
+    var isOpeningMenu: Bool { pendingMenuOpen != nil }
 
     func installMenu(_ menu: NSMenu) {
         self.menu = menu
@@ -40,6 +45,7 @@ final class StatusEntry: NSObject {
         let wasSplit = isSplit
         let next = presentation.map(StopwatchStatusFace.init)
         let imageChanged = !(next?.hasSameLabels(as: watch) ?? (watch == nil))
+        updateFocusTransition(to: next)
         watch = next
         if next?.width != previousWidth {
             item.length = face.width + (next.map { StopwatchStatusFace.leadingGap + $0.width } ?? 0)
@@ -79,8 +85,43 @@ final class StatusEntry: NSObject {
     }
 
     private func draw() {
+        let amounts = focusTransition?.amounts(at: ProcessInfo.processInfo.systemUptime)
+        if focusTransition != nil, amounts == nil { finishFocusTransition() }
         guard let image = face.renderedImage else { return }
-        item.button?.image = watch?.combinedImage(with: image) ?? image
+        item.button?.image = watch?.combinedImage(with: image, focusAmounts: amounts) ?? image
+    }
+
+    private func updateFocusTransition(to next: StopwatchStatusFace?) {
+        guard let watch, let next, next.sharesTimerOrder(with: watch) else {
+            finishFocusTransition()
+            return
+        }
+        let target = next.focusAmounts
+        guard target != watch.focusAmounts else { return }
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            finishFocusTransition()
+            return
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        // A second shortcut press continues from the widths already on screen.
+        let start = focusTransition?.amounts(at: now) ?? watch.focusAmounts
+        focusTransition = .init(from: start, to: target, start: now)
+        guard focusTimer == nil else { return }
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+            guard let self else {
+                timer.invalidate()
+                return
+            }
+            MainActor.assumeIsolated { self.draw() }
+        }
+        focusTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func finishFocusTransition() {
+        focusTransition = nil
+        focusTimer?.invalidate()
+        focusTimer = nil
     }
 
     private func configureInput() {
@@ -103,9 +144,10 @@ final class StatusEntry: NSObject {
             ])
             button.target = self
             button.action = #selector(pressed(_:))
-            button.sendAction(on: [.leftMouseDown, .rightMouseDown])
+            button.sendAction(on: [.leftMouseDown, .rightMouseUp])
             button.setAccessibilityLabel("网速和 StopWatch")
         } else {
+            pendingMenuOpen = nil
             if #available(macOS 27.0, *) {
                 item.expandedInterfaceSession?.cancel()
                 item.expandedInterfaceDelegate = nil
@@ -124,7 +166,7 @@ final class StatusEntry: NSObject {
         guard let button = item.button else { return }
         if let watch {
             button.setAccessibilityValue(face.accessibilityValue + "。StopWatch，" + watch.accessibilityValue)
-            button.setAccessibilityHelp("左侧打开网速菜单，右侧打开秒表面板。")
+            button.setAccessibilityHelp("左键点击秒表打开面板。右键点击任意位置打开网速菜单。")
         } else {
             button.setAccessibilityValue(face.accessibilityValue)
             button.setAccessibilityHelp(face.accessibilityHelp)
@@ -132,15 +174,18 @@ final class StatusEntry: NSObject {
     }
 
     @objc private func pressed(_ sender: NSStatusBarButton) {
+        let point = NSEvent.mouseLocation
         guard let event = NSApp.currentEvent,
-              event.type == .leftMouseDown || event.type == .rightMouseDown,
-              let (frame, screen) = location(at: NSEvent.mouseLocation) else {
+              event.type == .leftMouseDown || event.type == .rightMouseUp,
+              let (frame, screen) = location(at: point) else {
             openNetworkMenu()
             return
         }
-        if networkRegion(of: frame).contains(NSEvent.mouseLocation) {
+        if event.type == .rightMouseUp || event.modifierFlags.contains(.control) {
+            scheduleNetworkMenu(at: frame, on: screen, openedBySecondaryClick: true)
+        } else if networkRegion(of: frame).contains(point) {
             showNetworkMenu(at: frame, on: screen)
-        } else if stopwatchRegion(of: frame).contains(NSEvent.mouseLocation) {
+        } else if stopwatchRegion(of: frame).contains(point) {
             showStopwatch(at: frame, on: screen)
         }
     }
@@ -148,6 +193,17 @@ final class StatusEntry: NSObject {
     private func openNetworkMenu() {
         guard let (frame, screen) = location(at: nil) else { return }
         showNetworkMenu(at: frame, on: screen)
+    }
+
+    private func scheduleNetworkMenu(at frame: NSRect, on screen: NSScreen, openedBySecondaryClick: Bool) {
+        let token = UUID()
+        pendingMenuOpen = token
+        // Let AppKit finish closing its previous menu session before reopening.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard let self, pendingMenuOpen == token else { return }
+            pendingMenuOpen = nil
+            showNetworkMenu(at: frame, on: screen, openedBySecondaryClick: openedBySecondaryClick)
+        }
     }
 
     func panelVisibilityChanged(_ visible: Bool) {
@@ -159,7 +215,7 @@ final class StatusEntry: NSObject {
         // WindowServer tracks primary clicks during a native expanded session.
         // Secondary clicks continue to arrive as regular status button actions.
         guard #available(macOS 27.0, *), item.expandedInterfaceSession != nil,
-              event.type == .leftMouseDown, panelVisible, let point = Self.screenPoint(of: event),
+              event.type == .leftMouseDown, panelVisible, let point = Self.primaryClickPoint(of: event),
               containsButton(at: point), let (frame, screen) = location(at: point) else { return false }
         if networkRegion(of: frame).contains(point) {
             showNetworkMenu(at: frame, on: screen)
@@ -183,17 +239,39 @@ final class StatusEntry: NSObject {
         }
     }
 
-    private func showNetworkMenu(at frame: NSRect, on screen: NSScreen) {
+    private func showNetworkMenu(at frame: NSRect, on screen: NSScreen, openedBySecondaryClick: Bool = false) {
         guard let menu, !trackingMenu else { return }
+        pendingMenuOpen = nil
         trackingMenu = true
         onCloseStopwatch?()
         synchronizeHighlight()
         let start = ProcessInfo.processInfo.systemUptime
+        // WindowServer can consume a click on the status item and return from
+        // native tracking without an NSApp.currentEvent.
+        let clickMonitor = openedBySecondaryClick ? NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            MainActor.assumeIsolated { self?.secondaryMenuClick = event }
+        } : nil
         // Link the tracking menu to its status item so VoiceOver can traverse
         // its native commands as well as the separate stopwatch action.
         item.menu = menu
-        let origin = NSPoint(x: frame.minX, y: min(frame.minY, screen.visibleFrame.maxY))
-        let selected = menu.popUp(positioning: nil, at: origin, in: nil)
+        let selected: Bool
+        if #available(macOS 27.0, *), let button = item.button {
+            // The native button owns the menu's tracking and selected appearance
+            // even when the click did not start an expanded interface session.
+            button.performClick(nil)
+            // The native call returns no selection result. A handoff still
+            // requires a primary click inside the stopwatch region.
+            selected = false
+        } else {
+            let origin = NSPoint(x: frame.minX, y: min(frame.minY, screen.visibleFrame.maxY))
+            selected = menu.popUp(positioning: nil, at: origin, in: nil)
+        }
+        let dismissalPoint = [NSApp.currentEvent, secondaryMenuClick].lazy.compactMap { event -> NSPoint? in
+            guard let event, event.timestamp >= start else { return nil }
+            return Self.primaryClickPoint(of: event)
+        }.first
+        if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
+        secondaryMenuClick = nil
         if isSplit { item.menu = nil }
         trackingMenu = false
         // NSMenu consumes the dismissal click. Its terminating mouse event still
@@ -202,25 +280,26 @@ final class StatusEntry: NSObject {
         if showPanelAfterMenu {
             showPanelAfterMenu = false
             if isSplit, !panelVisible { showStopwatch(at: frame, on: screen) }
-        } else if !selected, isSplit, let event = NSApp.currentEvent, event.timestamp >= start,
-           let point = Self.screenPoint(of: event), containsButton(at: point),
-           let (buttonFrame, destination) = location(at: point),
-           stopwatchRegion(of: buttonFrame).contains(point), !panelVisible {
-            showStopwatch(at: buttonFrame, on: destination)
+        } else if !selected, isSplit, let point = dismissalPoint, containsButton(at: point),
+           let (buttonFrame, destination) = location(at: point) {
+            if stopwatchRegion(of: buttonFrame).contains(point), !panelVisible {
+                showStopwatch(at: buttonFrame, on: destination)
+            } else if openedBySecondaryClick, networkRegion(of: buttonFrame).contains(point) {
+                scheduleNetworkMenu(at: buttonFrame, on: destination, openedBySecondaryClick: false)
+            }
         }
         synchronizeHighlight()
     }
 
-    private static func screenPoint(of event: NSEvent) -> NSPoint? {
-        switch event.type {
-        case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp:
-            guard let point = event.cgEvent?.location, let primary = NSScreen.screens.first else { return nil }
-            return NSPoint(x: point.x, y: primary.frame.maxY - point.y)
-        default: return nil
-        }
+    private static func primaryClickPoint(of event: NSEvent) -> NSPoint? {
+        guard event.type == .leftMouseDown || event.type == .leftMouseUp,
+              !event.modifierFlags.contains(.control),
+              let point = event.cgEvent?.location, let primary = NSScreen.screens.first else { return nil }
+        return NSPoint(x: point.x, y: primary.frame.maxY - point.y)
     }
 
     private func showStopwatch(at frame: NSRect, on screen: NSScreen) {
+        pendingMenuOpen = nil
         let region = stopwatchRegion(of: frame)
         onToggleStopwatch?(region, screen)
     }
@@ -244,20 +323,20 @@ extension StatusEntry: @preconcurrency NSStatusItemExpandedInterfaceDelegate {
     func statusItem(_ statusItem: NSStatusItem, didBegin session: NSStatusItemExpandedInterfaceSession) {
         guard isSplit, !trackingMenu, !panelVisible,
               let (frame, screen) = location(at: NSEvent.mouseLocation) else { return }
-        if stopwatchRegion(of: frame).contains(NSEvent.mouseLocation) {
+        let openedBySecondaryClick = NSEvent.modifierFlags.contains(.control)
+        if !openedBySecondaryClick, stopwatchRegion(of: frame).contains(NSEvent.mouseLocation) {
             showStopwatch(at: frame, on: screen)
         } else {
             // Allow AppKit to finish establishing the session before entering
             // the native menu's synchronous tracking loop.
             DispatchQueue.main.async { [weak self] in
                 guard let self, item.expandedInterfaceSession === session else { return }
-                showNetworkMenu(at: frame, on: screen)
+                showNetworkMenu(at: frame, on: screen, openedBySecondaryClick: openedBySecondaryClick)
             }
         }
     }
 
     func statusItemDidEndExpandedInterfaceSession(_ statusItem: NSStatusItem, animated: Bool) {
-        if trackingMenu { menu?.cancelTrackingWithoutAnimation() }
         if panelVisible { onCloseStopwatch?() }
     }
 }

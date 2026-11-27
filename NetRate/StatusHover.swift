@@ -5,6 +5,7 @@ final class StatusHover {
     private let item: NSStatusItem
     private let networkRegion: (NSRect) -> NSRect
     private let showsButtonTooltip: () -> Bool
+    private let menuIsOpening: () -> Bool
     private var globalMonitor: Any?
     private var localMonitor: Any?
     private var screens: [NSScreen] = []
@@ -16,10 +17,11 @@ final class StatusHover {
     private lazy var card = HoverCard()
 
     init(item: NSStatusItem, networkRegion: @escaping (NSRect) -> NSRect = { $0 },
-         showsButtonTooltip: @escaping () -> Bool = { true }) {
+         showsButtonTooltip: @escaping () -> Bool = { true }, menuIsOpening: @escaping () -> Bool = { false }) {
         self.item = item
         self.networkRegion = networkRegion
         self.showsButtonTooltip = showsButtonTooltip
+        self.menuIsOpening = menuIsOpening
         updateButtonTooltip()
     }
 
@@ -82,7 +84,7 @@ final class StatusHover {
     private func updatePosition(for event: CGEvent?) {
         let pointer = NSEvent.mouseLocation
         // Most moves are outside the menu bar. Only resolve the button frame near the top of a screen.
-        guard !menuIsOpen, let screen = screens.first(where: { $0.frame.contains(pointer) }),
+        guard !menuIsOpen, !menuIsOpening(), let screen = screens.first(where: { $0.frame.contains(pointer) }),
               pointer.y >= screen.frame.maxY - 48,
               item.isVisible, let button = item.button, let window = button.window, window.isVisible else {
             hide()

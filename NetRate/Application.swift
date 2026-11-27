@@ -56,7 +56,8 @@ final class Application: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let entry = statusEntry
         hover = StatusHover(item: entry.item, networkRegion: { [weak entry] frame in
             entry?.networkRegion(of: frame) ?? frame
-        }, showsButtonTooltip: { [weak entry] in entry?.isSplit != true })
+        }, showsButtonTooltip: { [weak entry] in entry?.isSplit != true },
+           menuIsOpening: { [weak entry] in entry?.isOpeningMenu == true })
         entry.onLayoutChange = { [weak self] in
             self?.hover.resetPosition()
             DispatchQueue.main.async { [weak self] in

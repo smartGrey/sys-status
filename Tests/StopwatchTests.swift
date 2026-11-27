@@ -288,6 +288,14 @@ final class StopwatchIntegrationTests: XCTestCase {
         XCTAssertLessThan(entry.networkRegion(of: button.bounds).width, button.bounds.width)
         XCTAssertNil(entry.item.menu)
 
+        let focusedWidth = entry.item.length
+        let previousImage = try XCTUnwrap(button.image)
+        state.select(second)
+        entry.updateStopwatch(state.presentation(at: 3600))
+        XCTAssertEqual(entry.item.length, focusedWidth)
+        XCTAssertFalse(button.image === previousImage)
+        XCTAssertTrue(try XCTUnwrap(button.accessibilityValue() as? String).contains("写作计时表，0 秒，待开始，快捷键焦点"))
+
         entry.updateStopwatch(nil)
         XCTAssertEqual(entry.item.length, original)
         XCTAssertTrue(entry.item.menu === menu)
@@ -316,13 +324,28 @@ final class StopwatchIntegrationTests: XCTestCase {
             var single = restored
             single.remove(second)
             let one = StopwatchStatusFace(single.presentation(at: 0))
-            // Two unnamed time chips have exactly one 3-point inter-chip gap.
-            XCTAssertEqual(empty.width, 2 * one.width + 3)
+            // There is only one 3-point marker slot and one 3-point gap.
+            XCTAssertEqual(empty.width, 2 * one.width + 6)
             single.toggle(first, at: 1)
             XCTAssertTrue(single.presentation(at: 1).readings[0].canReset)
             single.reset(first)
             XCTAssertFalse(single.presentation(at: 1).readings[0].canReset)
         }
+    }
+
+    @MainActor
+    func testFocusTransitionTransfersOnlyOneMarkerWidthWhenInterrupted() throws {
+        let initial = StopwatchStatusFace.FocusTransition(from: [1, 0, 0], to: [0, 1, 0], start: 0)
+        let halfway = try XCTUnwrap(initial.amounts(at: 0.07))
+        XCTAssertEqual(halfway, [0.5, 0.5, 0])
+
+        let interrupted = StopwatchStatusFace.FocusTransition(from: halfway, to: [0, 0, 1], start: 0.07)
+        XCTAssertEqual(interrupted.amounts(at: 0.07), halfway)
+        for offset in [0.01, 0.035, 0.07, 0.12, 0.13] {
+            let amounts = try XCTUnwrap(interrupted.amounts(at: 0.07 + offset))
+            XCTAssertEqual(amounts.reduce(0, +), 1, accuracy: 0.000001)
+        }
+        XCTAssertNil(interrupted.amounts(at: 0.22))
     }
 
     @MainActor
