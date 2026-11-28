@@ -8,42 +8,66 @@ final class ThermalReader {
     private struct Key {
         let code: UInt32
         let size: UInt32
+        let type: UInt32
     }
     private var available: [StatusMetric: [Key]] = [:]
+    private var fanKeys: [Key?]?
     private let chip = systemString("machdep.cpu.brand_string")
 
     func close() {
         if connection != 0 { IOServiceClose(connection); connection = 0 }
         available.removeAll()
+        fanKeys = nil
     }
     deinit { close() }
 
+    private func connect() -> Bool {
+        if connection != 0 { return true }
+        let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSMC"))
+        guard service != 0 else { return false }
+        defer { IOObjectRelease(service) }
+        return IOServiceOpen(service, mach_task_self_, 0, &connection) == KERN_SUCCESS
+    }
+
+    private func key(_ name: String) -> Key? {
+        let code = Self.fourCC(name)
+        guard let bytes = request(code, command: 9, size: 0) else { return nil }
+        return bytes.withUnsafeBytes {
+            Key(code: code, size: $0.loadUnaligned(fromByteOffset: 28, as: UInt32.self),
+                type: $0.loadUnaligned(fromByteOffset: 32, as: UInt32.self))
+        }
+    }
+
+    private func value(_ key: Key) -> Double? {
+        guard (1...4).contains(key.size), let data = request(key.code, command: 5, size: key.size) else { return nil }
+        return data.withUnsafeBytes { buffer in
+            switch (key.type, key.size) {
+            case (Self.fourCC("flt "), 4): return Double(buffer.loadUnaligned(fromByteOffset: 48, as: Float.self))
+            case (Self.fourCC("sp78"), 2): return Double(Int16(bigEndian: buffer.loadUnaligned(fromByteOffset: 48, as: Int16.self))) / 256
+            case (Self.fourCC("fpe2"), 2): return Double(UInt16(bigEndian: buffer.loadUnaligned(fromByteOffset: 48, as: UInt16.self))) / 4
+            case (Self.fourCC("ui8 "), 1): return Double(buffer[48])
+            default: return nil
+            }
+        }
+    }
+
     func temperature(_ metric: StatusMetric) -> Double? {
-        if connection == 0 {
-            let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSMC"))
-            guard service != 0 else { return nil }
-            defer { IOObjectRelease(service) }
-            guard IOServiceOpen(service, mach_task_self_, 0, &connection) == KERN_SUCCESS else { return nil }
-        }
-        if available[metric] == nil {
-            available[metric] = sensorNames(metric).compactMap { name in
-                let code = Self.fourCC(name)
-                guard let bytes = request(code, command: 9, size: 0) else { return nil }
-                let length = bytes.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 28, as: UInt32.self) }
-                let type = bytes.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 32, as: UInt32.self) }
-                guard (length == 4 && type == Self.fourCC("flt ")) || (length == 2 && type == Self.fourCC("sp78")) else { return nil }
-                return Key(code: code, size: length)
-            }
-        }
-        let values: [Double] = (available[metric] ?? []).compactMap { key in
-            guard let data = request(key.code, command: 5, size: key.size) else { return nil }
-            let value: Double = data.withUnsafeBytes { buffer in
-                if key.size == 4 { return Double(buffer.loadUnaligned(fromByteOffset: 48, as: Float.self)) }
-                return Double(Int16(bigEndian: buffer.loadUnaligned(fromByteOffset: 48, as: Int16.self))) / 256
-            }
-            return value.isFinite && value > 0 && value < 130 ? value : nil
-        }
+        guard connect() else { return nil }
+        if available[metric] == nil { available[metric] = sensorNames(metric).compactMap(key) }
+        let values = (available[metric] ?? []).compactMap(value).filter { $0 > 0 && $0 < 130 }
         return values.isEmpty ? nil : values.reduce(0, +) / Double(values.count)
+    }
+
+    func fanSpeeds() -> [Int?] {
+        guard connect() else { return [] }
+        if fanKeys == nil {
+            guard let count = key("FNum").flatMap(value), (0...10).contains(count) else { return [] }
+            fanKeys = (0..<Int(count)).map { key("F\($0)Ac") }
+        }
+        return (fanKeys ?? []).map { sensor in
+            guard let speed = sensor.flatMap(value), (0...30000).contains(speed) else { return nil }
+            return Int(speed.rounded())
+        }
     }
 
     private func sensorNames(_ metric: StatusMetric) -> [String] {

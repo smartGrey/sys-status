@@ -30,9 +30,8 @@ struct StatusFace {
         guard ratesChanged || displayedConnectivity != connectivity else { return false }
         let imageChanged = ratesChanged || displayedConnectivity?.color != connectivity.color
         if imageChanged { renderedImage = image(upload: up, download: down, color: connectivity.color) }
-        let summary = connectivity.summary
-        accessibilityHelp = summary
-        accessibilityValue = "上行" + up.spoken + "，下行" + down.spoken + "，" + summary
+        if displayedConnectivity != connectivity { accessibilityHelp = connectivity.summary }
+        accessibilityValue = "上行" + up.spoken + "，下行" + down.spoken + "，" + accessibilityHelp
         displayed = [up, down]
         displayedConnectivity = connectivity
         return imageChanged
@@ -72,7 +71,7 @@ struct StatusFace {
         let mask = context.makeImage()!
         // Resolve the foreground in each menu bar's drawing appearance. A
         // template status image receives an additional inactive tint on this Mac.
-        return NSImage(size: size, flipped: false) { bounds in
+        return NSImage(size: size, flipped: false) { [arrowColumn] bounds in
             guard let target = NSGraphicsContext.current?.cgContext else { return false }
             target.saveGState()
             target.clip(to: bounds, mask: mask)

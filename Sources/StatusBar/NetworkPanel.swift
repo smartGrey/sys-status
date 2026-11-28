@@ -2,12 +2,65 @@ import AppKit
 
 @MainActor
 final class NetworkPanel {
+    private let wirelessReader = WirelessReader()
+    private var wireless = WirelessLink()
+    private var wirelessSampling: Task<Void, Never>?
+    private var association: WirelessAssociationObserver?
+    private let bandwidth: BandwidthTest
+    var keepOpen: (() -> Void)?
+    var bandwidthBusyChanged: ((Bool) -> Void)?
+
+    init(bandwidth: BandwidthTest = BandwidthTest()) {
+        self.bandwidth = bandwidth
+        bandwidth.changed = { [weak self] in self?.bandwidthChanged() }
+    }
+
+    isolated deinit { wirelessSampling?.cancel() }
+
+    private func bandwidthChanged() {
+        if bandwidth.state == .idle { association = nil }
+        bandwidthBusyChanged?(bandwidth.busy)
+        if anchor != nil { card.showDiagnostics(wireless, bandwidth.state) }
+    }
+
+    func networkChanged() {
+        wireless = WirelessLink()
+        bandwidth.invalidate()
+        if anchor != nil {
+            card.showDiagnostics(wireless, bandwidth.state)
+            observeWireless()
+        }
+    }
+
+    private func observeWireless() {
+        wirelessSampling?.cancel()
+        wirelessSampling = Task { [weak self, wirelessReader] in
+            while !Task.isCancelled {
+                let reading = await wirelessReader.read(previousBars: self?.wireless.bars)
+                guard !Task.isCancelled, let self else { return }
+                if reading != wireless {
+                    wireless = reading
+                    card.showDiagnostics(reading, bandwidth.state)
+                }
+                do { try await Task.sleep(for: .seconds(3), tolerance: .milliseconds(300)) } catch { return }
+            }
+        }
+    }
+
+    private func toggleBandwidthTest() {
+        if bandwidth.busy { bandwidth.cancel(); return }
+        keepOpen?()
+        association = association ?? WirelessAssociationObserver { [weak self] in self?.networkChanged() }
+        bandwidth.start()
+    }
+
     private var connectivity = ConnectivityState()
     private var anchor: NSRect?
     private weak var screen: NSScreen?
     private var window: StatusPanelWindow?
     private lazy var card: HoverCard = {
         let card = HoverCard()
+        card.measureBandwidth = { [weak self] in self?.toggleBandwidthTest() }
         card.probeNow = { [weak self] in self?.probeNow?() }
         card.togglePin = { [weak self] in self?.window?.togglePinned?() }
         card.openSettings = { [weak self] in self?.configure?() }
@@ -56,11 +109,16 @@ final class NetworkPanel {
         self.window = window
         layout()
         card.setTimeline(readTimeline())
+        card.showDiagnostics(wireless, bandwidth.state)
+        observeWireless()
         card.setVisible(true)
         setTooltip?(nil)
         return window
     }
     private func close() {
+        wirelessSampling?.cancel()
+        wirelessSampling = nil
+        wireless = WirelessLink()
         card.setVisible(false)
         window?.orderOut(nil)
         anchor = nil

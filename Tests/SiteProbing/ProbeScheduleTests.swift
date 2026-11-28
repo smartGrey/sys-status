@@ -4,6 +4,32 @@ import XCTest
 
 final class ProbeScheduleTests: XCTestCase {
     @MainActor
+    func testBandwidthPauseDrainsPendingExpiresHistoryAndStaggersResume() async throws {
+        let h = ProbeHarness()
+        defer { h.stop() }
+        try await waitUntil { h.daily.count == 1 && h.fresh.count == 1 }
+        h.monitor.setBandwidthTesting(true)
+        h.delay.time = 1
+        h.daily[0].reply(204)
+        try await waitUntil { h.monitor.state.rows[0].dailyCount.successes == 1 }
+        h.advance(30)
+        try await waitUntil { h.fresh[0].stopped }
+        XCTAssertEqual(h.monitor.state.rows[0].freshCount.completed, 1)
+        XCTAssertEqual(h.daily.count, 1)
+        XCTAssertEqual(h.fresh.count, 1)
+        XCTAssertFalse(h.monitor.probeNow())
+        XCTAssertTrue(h.monitor.timeline.suspended)
+        h.advance(350)
+        XCTAssertEqual(h.monitor.state.rows[0].dailyCount.completed, 0)
+        h.monitor.setBandwidthTesting(false)
+        try await waitUntil { h.daily.count == 2 }
+        XCTAssertFalse(h.monitor.timeline.suspended)
+        XCTAssertEqual(h.fresh.count, 1)
+        h.advance(351)
+        try await waitUntil { h.fresh.count == 2 }
+    }
+
+    @MainActor
     func testManualRefreshSharesScheduleAndCooldown() async throws {
         var site = ProbeSite.builtIns[0]
         site.daily = .init(interval: 10, warning: 5, cutoff: 10, capacity: 1)

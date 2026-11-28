@@ -20,10 +20,14 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
     private lazy var toast = OperationToast()
     private let fileTools = FileToolsMenu()
     private var latestSpeed: Speed?
+    private var connectivity = ConnectivityState()
     private var isTerminating = false
 
     private lazy var sampler = NetworkSampler(sampled: { [weak self] speed in self?.display(speed) },
-                                             networkChanged: { [weak self] in self?.probes.monitor.networkDidChange() })
+                                             networkChanged: { [weak self] in
+                                                 self?.probes.monitor.networkDidChange()
+                                                 self?.networkPanel.networkChanged()
+                                             })
 
     init(dataDirectory: URL = AppDataFile.directory, defaults: UserDefaults = .standard) {
         preferences = StatusPreferences(url: AppDataFile.preferences.url(in: dataDirectory))
@@ -41,6 +45,8 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
         probes.didUpdate = { [weak self] in
             guard let self else { return }
             self.syncSpeedSampling()
+            self.connectivity = self.probes.state
+            self.networkPanel.update(self.connectivity)
             self.display(self.latestSpeed)
         }
         let entry = statusEntry
@@ -49,6 +55,8 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
         networkPanel.probeNow = { [weak probes] in _ = probes?.monitor.probeNow() }
         probes.monitor.timingDidChange = { [weak self] in self?.networkPanel.refreshTiming() }
         connectPanels(to: entry)
+        networkPanel.keepOpen = { [weak self] in self?.panels[.network]?.keepPreviewOpen() }
+        networkPanel.bandwidthBusyChanged = { [weak probes] busy in probes?.monitor.setBandwidthTesting(busy) }
         connectShortcuts()
         let menu = NSMenu()
         menu.autoenablesItems = false
@@ -184,6 +192,7 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
             sampler.start()
         } else {
             latestSpeed = nil
+            networkPanel.networkChanged()
             sampler.stop()
             sampler.stopObservingNetworkChanges()
         }
@@ -209,9 +218,7 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
     private func display(_ speed: Speed?) {
         guard !isTerminating else { return }
         latestSpeed = speed
-        let state = probes.state
-        statusEntry.updateNetwork(speed: speed, connectivity: state)
-        networkPanel.update(state)
+        statusEntry.updateNetwork(speed: speed, connectivity: connectivity)
     }
 
     @objc func systemWillSleep() {

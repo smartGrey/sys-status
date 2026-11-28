@@ -22,6 +22,20 @@ final class StatusPresentationTests: XCTestCase {
     }
 
     @MainActor
+    func testReplacingNetworkImageReleasesPreviousFrames() {
+        var face = StatusFace()
+        weak var first: NSImage?
+        for index in 1...240 {
+            autoreleasepool {
+                _ = face.update(speed: Speed(upload: Double(index), download: 0), connectivity: ConnectivityState())
+                if index == 1 { first = face.renderedImage }
+            }
+        }
+        XCTAssertNil(first)
+        XCTAssertNotNil(face.renderedImage)
+    }
+
+    @MainActor
     func testStatusColorsAcrossAppearances() throws {
         let face = StatusFace()
         XCTAssertEqual(face.width, 34)
@@ -278,7 +292,8 @@ final class StatusPresentationTests: XCTestCase {
         let site = try XCTUnwrap(view(card) { (button: NSButton) in button.accessibilityLabel()?.contains("快捷配置") == true })
         let config = try XCTUnwrap(view(card) { (button: NSButton) in button.title == "探测配置" })
         let all = try XCTUnwrap(view(card) { (button: NSButton) in button.title == "显示所有站点" })
-        let controls = [pin, probe, site, config, all]
+        let speedTest = try XCTUnwrap(view(card) { (button: NSButton) in button.title == "公网测速" })
+        let controls = [pin, probe, site, config, all, speedTest]
         for x in stride(from: 3.0, to: card.bounds.width, by: 13) {
             for y in stride(from: 3.0, to: card.bounds.height, by: 13) {
                 let point = NSPoint(x: x, y: y)

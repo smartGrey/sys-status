@@ -140,6 +140,10 @@ final class ProbeTimingView: NSView {
             }
         }
 
+        if timeline.suspended {
+            drawText("暂停", in: Self.nextContentRect, alignment: .center)
+            return
+        }
         if timeline.waitingForSlot(at: now) {
             drawText("等空位", in: Self.nextContentRect, alignment: .center)
             return

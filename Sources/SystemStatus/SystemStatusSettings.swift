@@ -1,7 +1,7 @@
 import Foundation
 
 enum ResourceModule: String, CaseIterable, Codable, Identifiable {
-    case battery, memory, disk, temperature, compute
+    case battery, memory, disk, temperature, compute, audio
     var id: Self { self }
     var title: String {
         switch self {
@@ -10,6 +10,7 @@ enum ResourceModule: String, CaseIterable, Codable, Identifiable {
         case .disk: "启动盘"
         case .temperature: "温度"
         case .compute: "算力"
+        case .audio: "音频设备"
         }
     }
 }
@@ -34,7 +35,7 @@ enum StatusMetric: String, CaseIterable, Codable, Identifiable {
         case .disk: "D"
         case .cpuTemperature: "C温"
         case .gpuTemperature: "G温"
-        case .batteryTemperature: "电温"
+        case .batteryTemperature: "池温"
         }
     }
     var isTemperature: Bool { self == .cpuTemperature || self == .gpuTemperature || self == .batteryTemperature }
@@ -134,6 +135,22 @@ struct SystemStatusSettings: Codable, Equatable {
     }
 }
 
+enum BatteryPowerMode: Int, Sendable {
+    case automatic = 0
+    case low = 1
+    case high = 2
+
+    static func fromLiveSettings(_ output: String) -> Self? {
+        for line in output.split(whereSeparator: \.isNewline) {
+            let fields = line.split(whereSeparator: \.isWhitespace)
+            if fields.first == "powermode", fields.count == 2, let value = Int(fields[1]) {
+                return Self(rawValue: value)
+            }
+        }
+        return nil
+    }
+}
+
 struct BatteryReading: Equatable, Sendable {
     var percent: Int?
     var connected = false
@@ -141,13 +158,30 @@ struct BatteryReading: Equatable, Sendable {
     var full = false
     var minutes: Int?
     var watts: Double?
+    var adapterWatts: Int?
+    var powerMode = BatteryPowerMode.automatic
+    var lowPower: Bool { powerMode == .low }
     var currentCapacity: Int?
     var fullCapacity: Int?
     var designCapacity: Int?
     var cycles: Int?
     var health: Int?
-    var isActivelyCharging: Bool { connected && charging && !full }
-    var source: String { connected ? (full ? "已充满" : charging ? "正在充电" : "已接电 · 未充电") : "电池供电" }
+    // The charger can report "charging" while the battery is supplementing a weak adapter.
+    var isDischargingOnAdapter: Bool { connected && !full && (watts ?? 0) <= -0.5 }
+    var isActivelyCharging: Bool { connected && charging && !full && !isDischargingOnAdapter }
+
+    var statusBarWatts: Int? {
+        guard let watts, abs(watts) >= 0.5 else { return nil }
+        guard isDischargingOnAdapter || (isActivelyCharging && watts > 0) else { return nil }
+        return Int(watts.rounded())
+    }
+
+    var source: String {
+        guard connected else { return "电池供电" }
+        if full { return "已充满" }
+        if isDischargingOnAdapter { return "已接电 · 电池放电" }
+        return isActivelyCharging ? "正在充电" : "已接电 · 未充电"
+    }
     var timeLabel: String {
         guard isActivelyCharging || !connected else { return full ? "已充满" : "未在充电" }
         guard let minutes, minutes >= 0 else { return "估算中" }
@@ -185,6 +219,7 @@ struct SystemReading: Equatable, Sendable {
     var neuralActivity: Double?
     var memory: MemoryReading?
     var disk: DiskReading?
+    var fans: [Int?] = []
     var temperatures: [StatusMetric: Double] = [:]
 
     func statusValue(_ metric: StatusMetric) -> String {
@@ -199,9 +234,12 @@ struct SystemReading: Equatable, Sendable {
 
 struct ResourceDemand: Equatable, Sendable {
     var metrics: Set<StatusMetric>
+    var batteryInStatusBar: Bool
     var needsBattery: Bool
     var batteryDetail: Bool
     var batteryPanel: Bool
+    var thermalPanel: Bool
+    var audioPanel: Bool
     var cores: Bool
     init(_ settings: SystemStatusSettings, panelVisible: Bool, details: Bool) {
         metrics = settings.enabled ? Set(settings.metrics.compactMap {
@@ -209,9 +247,12 @@ struct ResourceDemand: Equatable, Sendable {
             return nil
         }) : []
         let visible = settings.enabled && panelVisible ? Set(settings.modules).subtracting(settings.hidden) : []
+        thermalPanel = visible.contains(.temperature)
+        audioPanel = visible.contains(.audio)
         cores = visible.contains(.compute)
         batteryPanel = visible.contains(.battery)
-        needsBattery = batteryPanel || (settings.enabled && settings.metrics.contains(.battery))
+        batteryInStatusBar = settings.enabled && settings.metrics.contains(.battery)
+        needsBattery = batteryPanel || batteryInStatusBar
         batteryDetail = batteryPanel && details
         if cores { metrics.insert(.cpu) }
         if visible.contains(.memory) { metrics.insert(.memory) }

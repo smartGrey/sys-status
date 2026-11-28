@@ -24,6 +24,15 @@ final class DeviceRegistry {
         active = true
         observeSystem()
         refresh()
+    }
+
+    func setMonitoringAudio(_ monitoring: Bool) {
+        guard active, monitoring else {
+            timer?.invalidate()
+            timer = nil
+            return
+        }
+        guard timer == nil else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
         }

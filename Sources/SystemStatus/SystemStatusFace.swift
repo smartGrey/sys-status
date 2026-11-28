@@ -12,8 +12,13 @@ struct SystemStatusFace: Equatable {
         let percent: Int?
         let number: String
         let desktop: Bool
-        let watts: String?
+        let watts: Int?
         let plugged: Bool
+        let powerMode: BatteryPowerMode
+
+        var powerText: String? {
+            watts.map { ($0 < 0 ? "−" : "") + String(abs($0)) + "W" }
+        }
     }
     private enum Content: Equatable {
         case battery(BatteryBadge)
@@ -45,12 +50,13 @@ struct SystemStatusFace: Equatable {
                 let battery = reading.battery
                 let number = battery?.percent.map(String.init) ?? "—"
                 let desktop = reading.hasBattery == false
-                let watts = battery?.isActivelyCharging == true ?
-                    (battery?.watts.flatMap { $0 >= 0 ? "\(Int($0.rounded()))W" : nil } ?? "—W") : nil
+                let watts = battery?.statusBarWatts
                 let plugged = battery?.connected == true && watts == nil
-                let extra = watts.map { Self.dotSpace + Self.measure($0, Self.batteryFont) } ?? (plugged ? 11 : 0)
+                let badge = BatteryBadge(percent: battery?.percent, number: number, desktop: desktop,
+                                         watts: watts, plugged: plugged, powerMode: battery?.powerMode ?? .automatic)
+                let extra = badge.powerText.map { Self.dotSpace + Self.measure($0, Self.batteryFont) } ?? (plugged ? 11 : 0)
                 itemWidth = desktop ? 18 : 2 * Self.batteryInset + Self.measure(number, Self.batteryFont) + extra
-                content = .battery(BatteryBadge(percent: battery?.percent, number: number, desktop: desktop, watts: watts, plugged: plugged))
+                content = .battery(badge)
             case .metric(let metric):
                 let value = reading.statusValue(metric)
                 let labelWidth = Self.measure(metric.abbreviation, Self.labelFont)
@@ -78,8 +84,15 @@ struct SystemStatusFace: Equatable {
             switch slot.content {
             case .battery(let badge):
                 if badge.desktop { return "系统状态" }
-                let level = "电池 " + (badge.percent.map { "\($0)%" } ?? "未知")
-                if let watts = badge.watts { return level + "，充电 " + watts }
+                let mode = switch badge.powerMode {
+                case .automatic: ""
+                case .low: "低电量模式，"
+                case .high: "高电量模式，"
+                }
+                let level = mode + "电池 " + (badge.percent.map { "\($0)%" } ?? "未知")
+                if let watts = badge.watts {
+                    return level + (watts < 0 ? "，已接电，电池放电 " : "，充电 ") + "\(abs(watts))W"
+                }
                 return badge.plugged ? level + "，已接电" : level
             case .text(let text):
                 return text.metric.title + " " + text.value
@@ -102,6 +115,19 @@ struct SystemStatusFace: Equatable {
         let middle = sin(.pi * CGFloat(level) / 100)
         return NSColor(srgbRed: channel(16), green: channel(8), blue: channel(0),
                        alpha: dark ? 0.40 + 0.34 * middle : 0.67 + 0.09 * middle)
+    }
+
+    private static func batteryOutline(_ mode: BatteryPowerMode, dark: Bool) -> NSColor {
+        switch mode {
+        case .automatic:
+            .labelColor.withAlphaComponent(0.72)
+        case .low:
+            dark ? NSColor(srgbRed: 1, green: 0.78, blue: 0.27, alpha: 1)
+                 : NSColor(srgbRed: 0.65, green: 0.39, blue: 0.03, alpha: 1)
+        case .high:
+            dark ? NSColor(srgbRed: 0.39, green: 0.69, blue: 1, alpha: 1)
+                 : NSColor(srgbRed: 0.11, green: 0.40, blue: 0.76, alpha: 1)
+        }
     }
 
     private static func ink(on tint: NSColor, dark: Bool) -> NSColor {
@@ -139,13 +165,14 @@ struct SystemStatusFace: Equatable {
                     }
                     let box = NSRect(x: slot.x + 0.5, y: 1, width: slot.width-1, height: 18)
                     let outline = NSBezierPath(roundedRect: box, xRadius: 4, yRadius: 4)
-                    NSColor.labelColor.withAlphaComponent(0.72).setStroke()
+                    let dark = NSAppearance.currentDrawing().bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                    Self.batteryOutline(badge.powerMode, dark: dark).setStroke()
                     outline.stroke()
                     @MainActor func drawContents(_ ink: NSColor) {
                         let start = slot.x + Self.batteryInset
                         text(badge.number, font: Self.batteryFont, color: ink, x: start)
                         let end = start + Self.measure(badge.number, Self.batteryFont)
-                        if let watts = badge.watts {
+                        if let watts = badge.powerText {
                             ink.setFill()
                             NSBezierPath(ovalIn: NSRect(x: end + 2, y: 9, width: 2, height: 2)).fill()
                             text(watts, font: Self.batteryFont, color: ink, x: end + Self.dotSpace)
@@ -160,7 +187,6 @@ struct SystemStatusFace: Equatable {
                         NSGraphicsContext.saveGraphicsState()
                         NSBezierPath(roundedRect: track, xRadius: 2.8, yRadius: 2.8).addClip()
                         NSBezierPath(rect: filled).addClip()
-                        let dark = NSAppearance.currentDrawing().bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
                         let tint = Self.batteryTint(percent, dark: dark)
                         tint.setFill()
                         track.fill()

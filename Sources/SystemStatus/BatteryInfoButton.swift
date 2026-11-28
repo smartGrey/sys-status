@@ -25,6 +25,12 @@ struct BatteryInfoButton: View {
             VStack(alignment: .leading, spacing: 7) {
                 Text("电池详情").font(.headline)
                 Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 5) {
+                    if let battery {
+                        GridRow {
+                            Text("低电量模式").foregroundStyle(.secondary)
+                            Text(battery.lowPower ? "已开启" : "已关闭").gridColumnAlignment(.trailing)
+                        }
+                    }
                     detail("电池健康", battery?.health, "%")
                     detail("循环次数", battery?.cycles, "")
                     detail("当前容量", battery?.currentCapacity, " mAh")

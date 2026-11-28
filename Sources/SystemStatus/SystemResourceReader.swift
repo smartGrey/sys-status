@@ -10,6 +10,7 @@ actor SystemResourceReader {
     private var reading = SystemReading()
     private var previousCPU: [[UInt32]]?
     private var lastDemand: ResourceDemand?
+    private var lastPowerPreferencesRevision: UInt64?
     private var lastRead: [String: TimeInterval] = [:]
     private lazy var coreKinds = Self.readCoreKinds()
     private var ane: ANEActivityReader?
@@ -22,7 +23,7 @@ actor SystemResourceReader {
         mach_port_deallocate(mach_task_self_, host)
     }
 
-    func sample(_ demand: ResourceDemand, powerChanged: Bool = false) -> SystemReading {
+    func sample(_ demand: ResourceDemand, powerChanged: Bool = false, powerPreferencesRevision: UInt64 = 0) -> SystemReading {
         let now = ProcessInfo.processInfo.systemUptime
         let old = lastDemand
         lastDemand = demand
@@ -34,7 +35,9 @@ actor SystemResourceReader {
 
         if demand.needsBattery, due("battery", every: demand.batteryPanel || reading.battery?.charging == true ? 3 : .infinity,
                force: old?.needsBattery != true || powerChanged || old?.batteryPanel != demand.batteryPanel || old?.batteryDetail != demand.batteryDetail) {
-            readBattery(demand)
+            let refreshMode = old?.batteryInStatusBar != true || lastPowerPreferencesRevision != powerPreferencesRevision
+            readBattery(demand, refreshPowerMode: refreshMode)
+            lastPowerPreferencesRevision = powerPreferencesRevision
         } else if !demand.needsBattery {
             reading.battery = nil
             reading.hasBattery = nil
@@ -90,11 +93,13 @@ actor SystemResourceReader {
         let sensors = demand.metrics.filter(\.isTemperature)
         if sensors.isEmpty {
             if !reading.temperatures.isEmpty || old?.metrics.contains(where: \.isTemperature) == true { thermal.close(); reading.temperatures = [:] }
-        } else if due("temperature", every: 2.8, force: sensors != old?.metrics.filter(\.isTemperature)) {
+        } else if due("temperature", every: 2.8, force: sensors != old?.metrics.filter(\.isTemperature) || old?.thermalPanel != demand.thermalPanel) {
+            if demand.thermalPanel { reading.fans = thermal.fanSpeeds() }
             reading.temperatures = Dictionary(uniqueKeysWithValues: sensors.compactMap { sensor in
                 thermal.temperature(sensor).map { (sensor, $0) }
             })
         }
+        if !demand.thermalPanel { reading.fans = [] }
         return reading
     }
 
@@ -103,7 +108,7 @@ actor SystemResourceReader {
         return IORegistryEntryCreateCFProperty(gpu, key as CFString, nil, 0)?.takeRetainedValue()
     }
 
-    private func readBattery(_ demand: ResourceDemand) {
+    private func readBattery(_ demand: ResourceDemand, refreshPowerMode: Bool) {
         guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
               let list = IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef] else {
             reading.battery = nil
@@ -117,6 +122,21 @@ actor SystemResourceReader {
         var battery = BatteryReading()
         battery.percent = (data["Current Capacity"] as? Int).flatMap { (0...100).contains($0) ? $0 : nil }
         battery.connected = data["Power Source State"] as? String == "AC Power"
+        if ProcessInfo.processInfo.isLowPowerModeEnabled {
+            battery.powerMode = .low
+        } else if demand.batteryInStatusBar {
+            let previous = reading.battery
+            if refreshPowerMode || previous?.connected != battery.connected || previous?.lowPower == true {
+                battery.powerMode = Self.readLivePowerMode() == .high ? .high : .automatic
+            } else {
+                battery.powerMode = previous?.powerMode ?? .automatic
+            }
+        }
+        if demand.batteryPanel, battery.connected,
+           let adapter = IOPSCopyExternalPowerAdapterDetails()?.takeRetainedValue() as? [String: Any],
+           let watts = adapter[kIOPSPowerAdapterWattsKey] as? Int, watts > 0 {
+            battery.adapterWatts = watts
+        }
         battery.charging = data["Is Charging"] as? Bool == true
         battery.full = data["Is Charged"] as? Bool == true || (battery.connected && !battery.charging && battery.percent == 100)
         battery.minutes = (data[battery.charging ? "Time to Full Charge" : "Time to Empty"] as? Int).flatMap {
@@ -146,6 +166,22 @@ actor SystemResourceReader {
             }
         }
         reading.battery = battery
+    }
+
+    // The public low-power API covers Low. pmset reads the current power profile
+    // for High, which is queried only on demand, preference or power-source changes.
+    private static func readLivePowerMode() -> BatteryPowerMode? {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
+        process.arguments = ["-g", "live"]
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+        return BatteryPowerMode.fromLiveSettings(String(decoding: data, as: UTF8.self))
     }
 
     /// macOS reports a calibrated health percentage independently of the instantaneous capacities.

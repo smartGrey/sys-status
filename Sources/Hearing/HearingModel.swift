@@ -120,7 +120,9 @@ final class HearingModel: ObservableObject {
     }
     private func updatePolling() {
         guard !shuttingDown else { return }
-        let interval = RuntimePolling.interval(active: isListening || starting || calibrating, sleeping: sleeping)
+        let active = isListening || starting || calibrating
+        registry.setMonitoringAudio(active && !sleeping)
+        let interval = RuntimePolling.interval(active: active, sleeping: sleeping)
         guard interval != pollingInterval else { return }
         timer?.invalidate(); timer = nil; pollingInterval = interval
         guard let interval else { return }
@@ -154,6 +156,7 @@ final class HearingModel: ObservableObject {
     }
     func setEnabled(_ enabled: Bool, feedback: OperationFeedback? = nil) {
         guard !shuttingDown, preferences.enabled != enabled else { return }
+        if enabled { registry.refresh() }
         preferences.enabled = enabled
         cancelCalibration(restore: false)
         if persist() { (feedback ?? panelFeedback()).show(enabled ? "环境声透传开关已开启" : "环境声透传开关已关闭") }

@@ -38,8 +38,76 @@ final class SystemStatusTests: XCTestCase {
         restored.restore()
         XCTAssertEqual(restored.settings, controller.settings)
         XCTAssertEqual(restored.settings.metrics, [.metric(.cpu), .metric(.memory), .metric(.disk)])
-        XCTAssertEqual(restored.settings.modules, [.temperature,.battery,.compute,.memory,.disk])
+        XCTAssertEqual(restored.settings.modules, [.temperature,.battery,.compute,.memory,.disk,.audio])
         XCTAssertEqual(restored.menuItem.state, .on)
+    }
+
+    func testFanReadingsAndOptionalDeviceDemand() {
+        XCTAssertNil(ThermalPalette.fanLabel([]))
+        XCTAssertEqual(ThermalPalette.fanLabel([0, 0]), "风扇停转")
+        XCTAssertEqual(ThermalPalette.fanLabel([nil, nil]), "风扇 — / —")
+        XCTAssertEqual(ThermalPalette.fanLabel([2150, nil]), "风扇 2150 / — RPM")
+        var settings = SystemStatusSettings()
+        settings.enabled = true
+        let closed = ResourceDemand(settings, panelVisible: false, details: false)
+        XCTAssertFalse(closed.audioPanel)
+        XCTAssertFalse(closed.thermalPanel)
+        let visible = ResourceDemand(settings, panelVisible: true, details: false)
+        XCTAssertTrue(visible.audioPanel)
+        XCTAssertTrue(visible.thermalPanel)
+        settings.hidden = [.audio, .temperature]
+        XCTAssertFalse(ResourceDemand(settings, panelVisible: true, details: false).audioPanel)
+        XCTAssertFalse(ResourceDemand(settings, panelVisible: true, details: false).thermalPanel)
+        let normal = BatteryReading(percent: 62, connected: true)
+        var low = normal
+        low.powerMode = .low
+        let first = SystemStatusFace(reading: SystemReading(battery: normal), metrics: [.battery])
+        let second = SystemStatusFace(reading: SystemReading(battery: low), metrics: [.battery])
+        XCTAssertNotEqual(first, second)
+        XCTAssertEqual(first.width, second.width)
+        XCTAssertTrue(second.spoken.contains("低电量模式"))
+    }
+
+    func testHighPowerModeReadsLiveSettingsAndChangesTheBatteryFace() {
+        XCTAssertEqual(BatteryPowerMode.fromLiveSettings("Currently in use:\n powermode 2\n"), .high)
+        XCTAssertEqual(BatteryPowerMode.fromLiveSettings(" powermode 0\n"), .automatic)
+        XCTAssertEqual(BatteryPowerMode.fromLiveSettings(" powermode 1\n"), .low)
+        XCTAssertNil(BatteryPowerMode.fromLiveSettings(" lowpowermode 1\n"))
+        XCTAssertNil(BatteryPowerMode.fromLiveSettings(" powermode 8\n"))
+
+        let automatic = BatteryReading(percent: 80, connected: true)
+        var high = automatic
+        high.powerMode = .high
+        let normalFace = SystemStatusFace(reading: SystemReading(battery: automatic), metrics: [.battery])
+        let highFace = SystemStatusFace(reading: SystemReading(battery: high), metrics: [.battery])
+        XCTAssertNotEqual(highFace, normalFace)
+        XCTAssertEqual(highFace.width, normalFace.width)
+        XCTAssertTrue(highFace.spoken.contains("高电量模式"))
+        XCTAssertFalse(high.lowPower)
+    }
+
+    func testBatterySupplementingAdapterShowsDischargeInsteadOfChargeEstimate() {
+        let lowWattage = BatteryReading(percent: 72, connected: true, charging: true, watts: -25.9, adapterWatts: 25)
+        XCTAssertTrue(lowWattage.isDischargingOnAdapter)
+        XCTAssertFalse(lowWattage.isActivelyCharging)
+        XCTAssertEqual(lowWattage.source, "已接电 · 电池放电")
+        XCTAssertEqual(lowWattage.statusBarWatts, -26)
+        let face = SystemStatusFace(reading: SystemReading(battery: lowWattage), metrics: [.battery])
+        XCTAssertEqual(face.spoken, "电池 72%，已接电，电池放电 26W")
+
+        var battery = lowWattage
+        battery.watts = nil
+        XCTAssertTrue(battery.isActivelyCharging)
+        XCTAssertNil(battery.statusBarWatts)
+        battery.watts = 18
+        XCTAssertEqual(battery.statusBarWatts, 18)
+        battery.full = true
+        XCTAssertNil(battery.statusBarWatts)
+        battery.full = false
+        battery.connected = false
+        battery.watts = -7
+        XCTAssertFalse(battery.isDischargingOnAdapter)
+        XCTAssertNil(battery.statusBarWatts)
     }
 
     func testRemovingCPUCardPreservesLayoutAcrossUpgradeAndSave() throws {
@@ -57,7 +125,7 @@ final class SystemStatusTests: XCTestCase {
                 let expected: [ResourceModule] = hasCompute ? [.memory,.disk,.battery,.temperature,.compute]
                                                            : [.memory,.compute,.disk,.battery,.temperature]
                 let settings = controller.settings
-                XCTAssertEqual(settings.modules, expected)
+                XCTAssertEqual(settings.modules, expected + [.audio])
                 XCTAssertTrue(settings.hidden.contains(.disk))
                 XCTAssertEqual(settings.hidden.contains(.compute), hidden.contains("compute") || (!hasCompute && hidden.contains("cpu")))
                 XCTAssertEqual(settings.metrics, [.battery, .metric(.cpu)])
@@ -197,7 +265,7 @@ final class SystemStatusTests: XCTestCase {
         XCTAssertEqual(controller.settings.width, 580)
         XCTAssertEqual(controller.settings.height, SystemPanelLayout.heightToFit(width: 532))
         XCTAssertEqual(controller.settings.height, 40 + 3 * 110 + 2 * 10 + 8)
-        XCTAssertEqual(SystemPanelLayout.heightToFit(width: 531), 40 + 5 * 110 + 4 * 10 + 8)
+        XCTAssertEqual(SystemPanelLayout.heightToFit(width: 531), 40 + 6 * 110 + 5 * 10 + 8)
     }
 
     func testResetFitsCardsAfterEditingAndReopening() throws {

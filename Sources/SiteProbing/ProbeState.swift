@@ -75,13 +75,22 @@ struct ProbeHistory {
     private var samples: [(time: TimeInterval, success: Bool)] = []
 
     mutating func record(at time: TimeInterval, success: Bool) {
-        samples.removeAll { $0.time <= time - 300 }
+        expire(at: time)
         samples.append((time, success))
+    }
+
+    var nextExpiry: TimeInterval? { samples.first.map { $0.time + 300 } }
+
+    @discardableResult
+    mutating func expire(at time: TimeInterval) -> Bool {
+        guard let nextExpiry, nextExpiry <= time else { return false }
+        samples.removeAll { $0.time + 300 <= time }
+        return true
     }
 
     func count(at time: TimeInterval) -> SuccessCount {
         samples.reduce(into: SuccessCount()) { count, sample in
-            if sample.time > time - 300 {
+            if sample.time + 300 > time {
                 count.completed += 1
                 if sample.success { count.successes += 1 }
             }

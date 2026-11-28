@@ -99,6 +99,7 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
 
     func updateNetwork(speed: Speed?, connectivity: ConnectivityState) {
         guard !removed else { return }
+        let previousValue = face.accessibilityValue
         let imageChanged = face.update(speed: speed, connectivity: connectivity)
         let changed = networkEnabled != connectivity.enabled
         networkEnabled = connectivity.enabled
@@ -109,7 +110,7 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
             layoutChanged()
         }
         if imageChanged || changed { draw() }
-        updateAccessibility()
+        if changed || previousValue != face.accessibilityValue { updateAccessibility() }
     }
 
     func updateStopwatch(_ presentation: StopwatchPresentation?) {

@@ -175,7 +175,7 @@ private final class HoverDragSurface: PanelDragView {
         return super.hitTest(point)
     }
 
-    override func scrollWheel(with event: NSEvent) { card?.scrollTable(with: event) }
+    override func scrollWheel(with event: NSEvent) { card?.scrollContent(with: event) }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -220,6 +220,10 @@ private final class HoverDragSurface: PanelDragView {
 
 @MainActor
 final class HoverCard: NSBox {
+    private let summary = NetworkSummary()
+    private let bandwidth = HoverButton(title: "公网测速", target: nil, action: nil)
+    private var summaryTipRect: NSRect?
+    var measureBandwidth: (() -> Void)?
     private let heading = label("网络状况", size: 17)
     private let footer = label()
     private var traffic = ""
@@ -257,6 +261,11 @@ final class HoverCard: NSBox {
         contentView = NSView()
         heading.font = .systemFont(ofSize: 17, weight: .semibold)
         heading.textColor = .labelColor
+        bandwidth.target = self
+        bandwidth.action = #selector(measure)
+        bandwidth.bezelStyle = .rounded
+        bandwidth.controlSize = .mini
+        bandwidth.font = .systemFont(ofSize: 12)
         configure.target = self
         configure.action = #selector(settingsClicked)
         allSites.target = self
@@ -277,7 +286,7 @@ final class HoverCard: NSBox {
         dragSurface.autoresizingMask = [.width, .height]
         dragSurface.frame = contentView?.bounds ?? .zero
         setPinned(false)
-        for view in [heading, tableScroll, footer, dragSurface, configure, allSites, action, pin] { contentView?.addSubview(view) }
+        for view in [heading, tableScroll, footer, summary, dragSurface, configure, allSites, action, bandwidth, pin] { contentView?.addSubview(view) }
         for scroll in [tableScroll, bodyScroll] {
             scroll.drawsBackground = false
             scroll.scrollerStyle = .overlay
@@ -311,6 +320,30 @@ final class HoverCard: NSBox {
     }
 
     required init?(coder: NSCoder) { nil }
+    @objc private func measure() { measureBandwidth?() }
+
+    func showDiagnostics(_ wireless: WirelessLink, _ state: BandwidthTest.State) {
+        summary.update(wireless: wireless, state: state)
+        switch state {
+        case .running, .cancelling:
+            bandwidth.title = "取消测速"
+            bandwidth.toolTip = "取消后恢复站点探测"
+        case .complete(let result) where result.hasFailures:
+            bandwidth.title = "重试测速"
+            bandwidth.toolTip = "重新测量公网下载和上传速度"
+        default:
+            bandwidth.title = "公网测速"
+            bandwidth.toolTip = "依次测量公网下载和上传速度，会占用网络带宽"
+        }
+        bandwidth.isEnabled = state != .cancelling
+        if bounds.width > 0 { layoutHeader(in: bounds.size) }
+    }
+
+    @objc func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint,
+                    userData data: UnsafeMutableRawPointer?) -> String {
+        [summary.wirelessTip, summary.resultTip].filter { !$0.isEmpty }.joined(separator: "\n")
+    }
+
     @objc private func settingsClicked() { openSettings?() }
     @objc private func filterClicked() { toggleSites?(allSites.state == .on) }
     @objc private func probe() { probeNow?() }
@@ -337,12 +370,16 @@ final class HoverCard: NSBox {
 
     func canDrag(at pointInWindow: NSPoint) -> Bool {
         guard dragSurface.bounds.contains(dragSurface.convert(pointInWindow, from: nil)) else { return false }
-        return siteButton(at: pointInWindow) == nil && ![pin, action, configure, allSites].contains { $0.bounds.contains($0.convert(pointInWindow, from: nil)) }
+        return siteButton(at: pointInWindow) == nil && ![pin, action, configure, allSites, bandwidth].contains { $0.bounds.contains($0.convert(pointInWindow, from: nil)) }
     }
 
-    fileprivate func scrollTable(with event: NSEvent) {
-        guard !tableScroll.isHidden else { return }
+    fileprivate func scrollContent(with event: NSEvent) {
         let point = event.locationInWindow
+        if summary.hasHorizontalScroller, summary.bounds.contains(summary.convert(point, from: nil)) {
+            summary.scrollWheel(with: event)
+            return
+        }
+        guard !tableScroll.isHidden else { return }
         guard tableScroll.bounds.contains(tableScroll.convert(point, from: nil)) else { return }
         if bodyScroll.bounds.contains(bodyScroll.convert(point, from: nil)) {
             bodyScroll.scrollWheel(with: event)
@@ -385,7 +422,7 @@ final class HoverCard: NSBox {
     private func refreshTime() {
         let now = ProcessInfo.processInfo.systemUptime
         let cooling = now < timeline.manualAvailableAt
-        let enabled = available && !cooling && !timeline.lanes.isEmpty
+        let enabled = available && !timeline.suspended && !cooling && !timeline.lanes.isEmpty
         if action.isEnabled != enabled { action.isEnabled = enabled }
         let title = cooling ? "已触发探测" : "立即探测"
         if action.title != title { action.title = title }
@@ -406,26 +443,52 @@ final class HoverCard: NSBox {
         if footer.stringValue != message { footer.stringValue = message }
     }
 
+    private func layoutHeader(in size: NSSize) {
+        let inset: CGFloat = 18
+        let bottom = size.height - NetworkHeaderLine.insetFromTop
+        let titleSize = heading.intrinsicContentSize
+        let titleY = NetworkHeaderLine.textOrigin(heading, height: titleSize.height, bottom: bottom,
+                                                   reference: heading.stringValue)
+        heading.frame = NSRect(x: inset, y: titleY,
+                               width: ceil(titleSize.width) + 6, height: titleSize.height)
+        // Align the visible symbol within its larger hit area.
+        pin.frame = NSRect(x: size.width - 55, y: bottom - 10, width: 37, height: 35)
+        let buttonWidth: CGFloat = 74
+        let actionGap: CGFloat = 8
+        let summaryX = heading.frame.maxX + 11
+        let available = max(0, pin.frame.minX - summaryX - buttonWidth - actionGap - 4)
+        summary.frame = summary.frame(at: summaryX, bottom: bottom, available: available)
+        // The rounded mini bezel sits 2.5 points below the text's lower edge.
+        bandwidth.frame = NSRect(x: summary.frame.maxX + actionGap, y: bottom - 8, width: buttonWidth, height: 26)
+        if summaryTipRect != summary.frame {
+            dragSurface.removeAllToolTips()
+            dragSurface.addToolTip(summary.frame, owner: self, userData: nil)
+            summaryTipRect = summary.frame
+        }
+    }
+
     func update(_ state: ConnectivityState, availableHeight: CGFloat, availableWidth: CGFloat = .greatestFiniteMagnitude) -> NSSize {
         available = state.enabled && !state.configurationUnavailable
         let sites = available ? state.rows.filter { showAllSites || $0.enabled || $0.id == trackingSiteID } : []
         allSites.state = showAllSites ? .on : .off
         let inset: CGFloat = 18
-        let width = min(availableWidth, sites.isEmpty ? 429 : HoverColumns.width + 2 * inset)
+        let width = min(availableWidth, sites.isEmpty ? 680 : HoverColumns.width + 2 * inset)
         let bodyHeight = CGFloat(sites.count) * HoverColumns.rowHeight
         let wrapped = width < 630
         let footerHeight: CGFloat = wrapped ? 75 : 52
-        let chromeHeight = 47 + footerHeight
+        let chromeHeight = 49 + footerHeight
         let size = NSSize(width: width, height: min(availableHeight, sites.isEmpty ? chromeHeight : chromeHeight + HoverColumns.headerHeight + bodyHeight))
-        heading.frame = NSRect(x: inset, y: size.height - 39, width: width - 80, height: 24)
-        pin.frame = NSRect(x: width - 55, y: size.height - 46, width: 37, height: 35)
+        layoutHeader(in: size)
         traffic = state.footer
         configure.frame = NSRect(x: inset - 3, y: 10, width: 82, height: 34)
         allSites.sizeToFit()
         allSites.setFrameOrigin(NSPoint(x: configure.frame.maxX + 8, y: 27 - allSites.frame.height/2))
         let footerX = wrapped ? inset : allSites.frame.maxX + 12
         let footerEnd = wrapped ? width - inset : width - 139
-        footer.frame = NSRect(x: footerX, y: wrapped ? 45 : 16, width: max(0, footerEnd - footerX), height: 22)
+        let footerMiddle = wrapped ? 56 : allSites.frame.midY
+        let footerTextHeight = ceil(footer.intrinsicContentSize.height)
+        footer.frame = NSRect(x: footerX, y: footerMiddle - footerTextHeight / 2,
+                              width: max(0, footerEnd - footerX), height: footerTextHeight)
         let actionWidth: CGFloat = width < 370 ? 85 : 114
         action.frame = NSRect(x: width - inset - actionWidth, y: 10, width: actionWidth, height: 34)
         tableScroll.isHidden = sites.isEmpty

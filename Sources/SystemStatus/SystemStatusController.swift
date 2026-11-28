@@ -1,11 +1,15 @@
 import AppKit
 import SwiftUI
 import IOKit.ps
+import notify
 
 @MainActor
 final class SystemStatusController: NSObject, ObservableObject {
     @Published private(set) var settings = SystemStatusSettings()
     @Published private(set) var reading = SystemReading()
+    @Published private(set) var thermalState: ProcessInfo.ThermalState?
+    @Published private(set) var audioNames = AudioDeviceNames()
+    private var audioObserver: DefaultAudioDevices?
     @Published var editing = false {
         didSet {
             if visible, oldValue != editing { presentation?.resizeToSettings() }
@@ -19,6 +23,8 @@ final class SystemStatusController: NSObject, ObservableObject {
     private var sampling: Task<Void, Never>?
     private var demand: ResourceDemand?
     private var source: CFRunLoopSource?
+    private var powerPreferencesToken: Int32?
+    private var powerPreferencesRevision: UInt64 = 0
     private var awake = false
     private var visible = false
     private var presentation: SystemStatusPanel?
@@ -33,6 +39,7 @@ final class SystemStatusController: NSObject, ObservableObject {
 
     isolated deinit {
         sampling?.cancel()
+        stopObservingPowerPreferences()
         if let source { CFRunLoopSourceInvalidate(source) }
     }
 
@@ -112,9 +119,75 @@ final class SystemStatusController: NSObject, ObservableObject {
     private func publishFace() {
         didUpdate?(settings.enabled ? SystemStatusFace(reading: reading, metrics: settings.metrics, colors: settings.metricColors ?? [:]) : nil)
     }
+    private func powerModeChanged() {
+        guard let demand, demand.needsBattery else { return }
+        if demand.batteryInStatusBar { powerPreferencesRevision &+= 1 }
+        sample(powerChanged: true)
+    }
+
+    @objc private func thermalChanged() {
+        let state = ProcessInfo.processInfo.thermalState
+        if state != thermalState { thermalState = state }
+    }
+
+    private func stopObservingPowerPreferences() {
+        if let powerPreferencesToken { notify_cancel(powerPreferencesToken) }
+        powerPreferencesToken = nil
+    }
+
+    private func observeChanges(for next: ResourceDemand?) {
+        if (demand?.batteryInStatusBar == true) != (next?.batteryInStatusBar == true) {
+            if next?.batteryInStatusBar == true {
+                // The preference event also covers Automatic ↔ High, where the public
+                // low-power flag does not change. Read the live profile after this event.
+                var token: Int32 = 0
+                if notify_register_dispatch("com.apple.system.powermanagement.prefschange", &token, .main, { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        if self?.demand?.batteryInStatusBar == true { self?.powerModeChanged() }
+                    }
+                }) == NOTIFY_STATUS_OK { powerPreferencesToken = token }
+            } else { stopObservingPowerPreferences() }
+        }
+        let center = NotificationCenter.default
+        if (demand?.needsBattery == true) != (next?.needsBattery == true) {
+            center.removeObserver(self, name: .NSProcessInfoPowerStateDidChange, object: nil)
+            if next?.needsBattery == true {
+                center.addObserver(self, selector: #selector(receivedPowerChange),
+                                   name: .NSProcessInfoPowerStateDidChange, object: nil)
+            }
+        }
+        if (demand?.thermalPanel == true) != (next?.thermalPanel == true) {
+            center.removeObserver(self, name: ProcessInfo.thermalStateDidChangeNotification, object: nil)
+            if next?.thermalPanel == true {
+                thermalChanged()
+                center.addObserver(self, selector: #selector(receivedThermalChange),
+                                   name: ProcessInfo.thermalStateDidChangeNotification, object: nil)
+                thermalChanged()
+            } else { thermalState = nil }
+        }
+        if next?.audioPanel == true {
+            if audioObserver == nil {
+                audioObserver = DefaultAudioDevices { [weak self] names in
+                    if self?.audioNames != names { self?.audioNames = names }
+                }
+            }
+        } else if audioObserver != nil { audioObserver = nil; audioNames = AudioDeviceNames() }
+    }
+
+    @objc nonisolated private func receivedPowerChange() {
+        Task { @MainActor [weak self] in self?.powerModeChanged() }
+    }
+
+    @objc nonisolated private func receivedThermalChange() {
+        Task { @MainActor [weak self] in
+            if self?.demand?.thermalPanel == true { self?.thermalChanged() }
+        }
+    }
+
     private func refreshDemand() {
         guard awake, settings.enabled else {
             if source != nil || demand != nil {
+                observeChanges(for: nil)
                 sampling?.cancel()
                 sampling = nil
                 demand = nil
@@ -126,6 +199,7 @@ final class SystemStatusController: NSObject, ObservableObject {
             return
         }
         let next = ResourceDemand(settings, panelVisible: visible, details: details)
+        if next != demand { observeChanges(for: next) }
         if next.needsBattery && source == nil {
             source = IOPSNotificationCreateRunLoopSource({ context in
                 guard let context else { return }
@@ -148,7 +222,8 @@ final class SystemStatusController: NSObject, ObservableObject {
         sampling = Task { [weak self] in
             var changed = powerChanged
             while !Task.isCancelled {
-                let snapshot = await reader.sample(demand, powerChanged: changed)
+                guard let revision = self?.powerPreferencesRevision else { return }
+                let snapshot = await reader.sample(demand, powerChanged: changed, powerPreferencesRevision: revision)
                 guard !Task.isCancelled else { return }
                 if let self {
                     if reading != snapshot { reading = snapshot }

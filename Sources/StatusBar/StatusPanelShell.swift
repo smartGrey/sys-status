@@ -216,6 +216,16 @@ final class StatusPanelShell {
         openedChanged?(true)
     }
 
+    func keepPreviewOpen() {
+        guard previewing, let panel, panel.isVisible else { return }
+        cancelDismissal()
+        cancelPresentation()
+        opened = true
+        panel.level = .statusBar
+        panel.makeKeyAndOrderFront(nil)
+        openedChanged?(true)
+    }
+
     func dismissPreview() { cancelPresentation(); if previewing { hide() } }
 
     private func reveal(_ panel: NSPanel) {

@@ -119,11 +119,31 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
     }
 
     var timingDidChange: (() -> Void)?
+    private var suspendedForBandwidth = false
+
+    func setBandwidthTesting(_ value: Bool) {
+        guard value != suspendedForBandwidth else { return }
+        suspendedForBandwidth = value
+        if !value {
+            let time = now()
+            let overdue = sites.filter(\.settings.enabled).flatMap { site in
+                site.settings.lanes.filter { site.settings[$0].enabled && site[$0].next <= time }
+                    .map { (site[$0], site.settings[$0].interval) }
+            }
+            // Keep future deadlines. Spread overdue lanes over at most one normal interval.
+            if let shortest = overdue.map({ $0.1 }).min() {
+                let gap = min(1, Double(shortest) / Double(overdue.count))
+                for (index, entry) in overdue.enumerated() { entry.0.next = time + Double(index) * gap }
+            }
+        }
+        pump()
+    }
+
     private var manualAvailableAt = TimeInterval.zero
 
     // Only built for an open hover panel. Countdown and elapsed time use the same uptime as pump().
     var timeline: ProbeTimeline {
-        var timeline = ProbeTimeline(manualAvailableAt: manualAvailableAt)
+        var timeline = ProbeTimeline(suspended: suspendedForBandwidth, manualAvailableAt: manualAvailableAt)
         guard awake, enabled, networkDelay == nil else { return timeline }
         let active = Dictionary(grouping: requests.values.filter { $0.lane.active && !$0.settled },
                                 by: { ObjectIdentifier($0.lane) })
@@ -134,7 +154,7 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
                 let starts = active[ObjectIdentifier(lane)]?.map(\.start).sorted() ?? []
                 timeline.lanes[site.settings.id, default: [:]][kind] = ProbeLaneTimeline(
                     result: lane.lastResult, next: lane.next, settings: settings,
-                    full: (occupied[site.settings.id]?[kind] ?? 0) >= settings.capacity, starts: starts)
+                    full: (occupied[site.settings.id]?[kind] ?? 0) >= settings.capacity, starts: starts, suspended: suspendedForBandwidth)
             }
         }
         return timeline
@@ -143,7 +163,7 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
     @discardableResult
     func probeNow() -> Bool {
         let time = now()
-        guard awake, enabled, networkDelay == nil, time >= manualAvailableAt,
+        guard awake, enabled, !suspendedForBandwidth, networkDelay == nil, time >= manualAvailableAt,
               sites.contains(where: { $0.settings.enabled && $0.settings.hasEnabledLane }) else { return false }
         manualAvailableAt = time + 3
         let pending = Set(requests.values.filter { $0.lane.active && !$0.settled }.map { ObjectIdentifier($0.lane) })
@@ -289,8 +309,13 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
             }
             if !attempt.settled { wake = min(wake, attempt.deadline) }
         }
+        var expired = false
         for site in sites where site.settings.enabled {
             for kind in site.settings.lanes where site.settings[kind].enabled {
+                let live = site[kind]
+                if live.history.expire(at: time) { expired = true }
+                if let expiry = live.history.nextExpiry { wake = min(wake, expiry) }
+                guard !suspendedForBandwidth else { continue }
                 let capacity = site.settings[kind].capacity
                 let lane = site[kind]
                 guard (occupied[site.settings.id]?[kind] ?? 0) < capacity else { continue }
@@ -301,6 +326,7 @@ final class ConnectivityMonitor: NSObject, URLSessionDataDelegate {
                 if (occupied[site.settings.id]?[kind] ?? 0) < capacity { wake = min(wake, lane.next) }
             }
         }
+        if expired { onChange() }
         timer?.schedule(deadline: wake.isFinite ? .now() + max(0, wake - now()) : .distantFuture)
         timingDidChange?()
     }

@@ -7,6 +7,7 @@ struct ProbeLaneTimeline: Equatable {
     let full: Bool
     /// Uptime at dispatch, oldest first. All live requests in a lane share its current settings.
     let starts: [TimeInterval]
+    var suspended = false
 
     func remaining(at now: TimeInterval) -> Double { max(0, next - now) }
     func waitingForSlot(at now: TimeInterval) -> Bool { full && next <= now }
@@ -26,13 +27,14 @@ struct ProbeLaneTimeline: Equatable {
     }
 
     func detail(at now: TimeInterval, minimumAge: TimeInterval) -> String {
-        let schedule = waitingForSlot(at: now) ? "下次探测等待空位" : "下次探测 " + String(format: "%.1f 秒后", remaining(at: now))
+        let schedule = suspended ? "测速期间暂停发起" : waitingForSlot(at: now) ? "下次探测等待空位" : "下次探测 " + String(format: "%.1f 秒后", remaining(at: now))
         return ([schedule] + waits(at: now, minimumAge: minimumAge) +
                 ["\(settings.warning) 秒提醒，\(settings.cutoff) 秒截止"]).joined(separator: "\n")
     }
 }
 
 struct ProbeTimeline: Equatable {
+    var suspended = false
     var lanes: [String: [ProbeLane: ProbeLaneTimeline]] = [:]
     var manualAvailableAt = TimeInterval.zero
 }

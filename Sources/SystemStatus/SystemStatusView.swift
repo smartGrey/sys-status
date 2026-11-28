@@ -22,6 +22,7 @@ enum SystemPanelLayout {
 
 @MainActor
 struct SystemStatusView: View {
+    @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var model: SystemStatusController
 
     private var modules: [ResourceModule] {
@@ -55,11 +56,21 @@ struct SystemStatusView: View {
     }
 
     private func tile(_ module: ResourceModule) -> some View {
-        VStack(alignment: .leading, spacing: module == .compute ? 10 : 13) {
+        VStack(alignment: .leading, spacing: [.temperature, .battery].contains(module) ? 5 : module == .compute ? 10 : 13) {
             HStack {
                 Text(module.title).font(.system(size: 13, weight: .semibold))
                 if module == .battery && !model.editing { BatteryInfoButton(model: model) }
                 Spacer()
+                if module == .battery && !model.editing {
+                    Text(model.reading.battery?.source ?? (model.reading.hasBattery == false ? "无内置电池" : "—"))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if module == .temperature, !model.editing, let state = model.thermalState {
+                    HStack(spacing: 4) {
+                        Circle().fill(ThermalPalette.tint(state)).frame(width: 6, height: 6)
+                        Text("热压力 · " + ThermalPalette.title(state))
+                    }.font(.caption).foregroundStyle(ThermalPalette.tint(state))
+                }
                 if module == .compute && !model.editing {
                     Text(ComputeCard.chip).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                 }
@@ -78,6 +89,7 @@ struct SystemStatusView: View {
                 case .memory: memory
                 case .disk: disk
                 case .temperature: temperature
+                case .audio: audio
                 }
             }.opacity(model.editing && model.settings.hidden.contains(module) ? 0.4 : 1)
         }
@@ -90,23 +102,25 @@ struct SystemStatusView: View {
 
     private var battery: some View {
         let b = model.reading.battery
-        return VStack(alignment: .leading, spacing: 7) {
+        return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
                 number(b?.percent.map { "\($0)%" } ?? "—")
                 Spacer()
-                Text(b?.source ?? (model.reading.hasBattery == false ? "无内置电池" : "—")).font(.caption).foregroundStyle(.secondary)
+                if let b, !b.connected || b.isActivelyCharging {
+                    Text(b.isActivelyCharging && b.minutes == nil ? "充满时间暂不可用"
+                         : (b.isActivelyCharging ? "距充满 " : "可用 ") + b.timeLabel)
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
-            gauge(b?.percent.map { Double($0) / 100 }, color: b?.charging == true ? .green : .accentColor)
-            if let b {
-                HStack(spacing: 8) {
-                    if let w = b.watts {
-                        Text(String(format: w < 0 ? "放电 %.1f W" : w > 0 ? "充电 %.1f W" : "%.1f W", abs(w)))
-                    }
-                    if !b.connected || b.isActivelyCharging {
-                        Text((b.charging ? "距充满 " : "可用 ") + b.timeLabel)
-                    }
-                }.font(.caption).foregroundStyle(.secondary).monospacedDigit()
-            }
+            gauge(b?.percent.map { Double($0) / 100 },
+                  color: Color(nsColor: SystemStatusFace.batteryTint(b?.percent ?? 0, dark: colorScheme == .dark)))
+            HStack(spacing: 8) {
+                if let watts = b?.adapterWatts { Text("适配器 \(watts) W") }
+                Spacer(minLength: 0)
+                if let w = b?.watts {
+                    Text(String(format: w < 0 ? "放电 %.1f W" : w > 0 ? "充电 %.1f W" : "%.1f W", abs(w)))
+                }
+            }.font(.caption).foregroundStyle(.secondary).monospacedDigit()
         }
     }
 
@@ -132,13 +146,35 @@ struct SystemStatusView: View {
         }
     }
     private var temperature: some View {
-        HStack(spacing: 8) {
-            ForEach([StatusMetric.cpuTemperature, .gpuTemperature, .batteryTemperature]) { metric in
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(String(metric.title.dropLast(2))).font(.caption).foregroundStyle(.secondary)
-                    number(model.reading.temperatures[metric].map { String(format: "%.0f°C", $0) } ?? "—")
-                }.frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                ForEach([StatusMetric.cpuTemperature, .gpuTemperature, .batteryTemperature]) { metric in
+                    let value = model.reading.temperatures[metric]
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(String(metric.title.dropLast(2))).font(.caption).foregroundStyle(.secondary)
+                        number(value.map { String(format: "%.0f°C", $0) } ?? "—")
+                            .foregroundStyle(ThermalPalette.temperature(value, battery: metric == .batteryTemperature, dark: colorScheme == .dark))
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
+            if let fans = ThermalPalette.fanLabel(model.reading.fans) {
+                Label(fans, systemImage: "fan").font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(1).minimumScaleFactor(0.82).monospacedDigit()
+            }
+        }
+    }
+
+    private var audio: some View {
+        Grid(alignment: .leading, horizontalSpacing: 9, verticalSpacing: 7) {
+            audioRow("输入", model.audioNames.input)
+            audioRow("输出", model.audioNames.output)
+        }
+    }
+
+    private func audioRow(_ label: String, _ name: String?) -> some View {
+        GridRow {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(name ?? "—").font(.callout).lineLimit(1).truncationMode(.middle).help(name ?? "暂无设备")
         }
     }
 
