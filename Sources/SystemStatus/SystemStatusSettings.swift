@@ -1,15 +1,15 @@
 import Foundation
 
 enum ResourceModule: String, CaseIterable, Codable, Identifiable {
-    case battery, cpu, memory, disk, temperature
+    case battery, memory, disk, temperature, compute
     var id: Self { self }
     var title: String {
         switch self {
         case .battery: "电池"
-        case .cpu: "CPU"
         case .memory: "内存"
         case .disk: "启动盘"
         case .temperature: "温度"
+        case .compute: "算力"
         }
     }
 }
@@ -40,30 +40,93 @@ enum StatusMetric: String, CaseIterable, Codable, Identifiable {
     var isTemperature: Bool { self == .cpuTemperature || self == .gpuTemperature || self == .batteryTemperature }
 }
 
+/// Display order includes the battery badge. Only text indicators have a palette and a metric to sample.
+enum StatusIndicator: Hashable, RawRepresentable, Codable {
+    case battery
+    case metric(StatusMetric)
+
+    init?(rawValue: String) {
+        if rawValue == "battery" { self = .battery }
+        else if let metric = StatusMetric(rawValue: rawValue) { self = .metric(metric) }
+        else { return nil }
+    }
+    var rawValue: String {
+        switch self {
+        case .battery: "battery"
+        case .metric(let metric): metric.rawValue
+        }
+    }
+    var title: String {
+        switch self {
+        case .battery: "电池"
+        case .metric(let metric): metric.title
+        }
+    }
+}
+
 struct SystemStatusSettings: Codable, Equatable {
     var version = 1
     var enabled = false
-    var metrics: [StatusMetric] = []
+    var metrics: [StatusIndicator] = [.battery]
     // Optional keys keep existing version-one documents readable.
-    var inactiveMetricOrder: [StatusMetric]?
+    var inactiveMetricOrder: [StatusIndicator]?
     var metricColors: [String: MetricColor]?
-    var inactiveMetrics: [StatusMetric] {
+    var inactiveMetrics: [StatusIndicator] {
         var seen = Set(metrics)
-        return ((inactiveMetricOrder ?? []) + StatusMetric.allCases).filter { seen.insert($0).inserted }
+        let all = [.battery] + StatusMetric.allCases.map(StatusIndicator.metric)
+        return ((inactiveMetricOrder ?? []) + all).filter { seen.insert($0).inserted }
+    }
+    func canMoveIndicator(_ indicator: StatusIndicator) -> Bool {
+        metrics.count != 1 || metrics.first != indicator
     }
     func color(for metric: StatusMetric) -> MetricColor {
         metricColors?[metric.rawValue] ?? .standard(for: metric)
     }
     var modules = ResourceModule.allCases
     var hidden: Set<ResourceModule> = []
-    var width: Double = 580
-    var height: Double = 426
+    var width: Double = SystemPanelLayout.defaultWidth
+    var height: Double = SystemPanelLayout.heightToFit(width: SystemPanelLayout.defaultWidth)
     static let minimum = CGSize(width: 292, height: 190)
 
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(Int.self, forKey: .version)
+        enabled = try values.decode(Bool.self, forKey: .enabled)
+        metrics = try values.decode([StatusIndicator].self, forKey: .metrics)
+        inactiveMetricOrder = try values.decodeIfPresent([StatusIndicator].self, forKey: .inactiveMetricOrder)
+        // Older documents never listed the battery; it was always drawn first.
+        if !metrics.contains(.battery), inactiveMetricOrder?.contains(.battery) != true {
+            metrics.insert(.battery, at: 0)
+        }
+        metricColors = try values.decodeIfPresent([String: MetricColor].self, forKey: .metricColors)
+        width = try values.decode(Double.self, forKey: .width)
+        height = try values.decode(Double.self, forKey: .height)
+
+        let order = try values.decode([String].self, forKey: .modules)
+        let hiddenIDs = try values.decode([String].self, forKey: .hidden)
+        // Before the compute card existed, CPU owned its position and visibility.
+        let inheritCPU = order.contains("cpu") && !order.contains(ResourceModule.compute.rawValue)
+        func cards(_ ids: [String], for key: CodingKeys) throws -> [ResourceModule] {
+            try ids.compactMap { id in
+                if id == "cpu" { return inheritCPU ? .compute : nil }
+                guard let card = ResourceModule(rawValue: id) else {
+                    throw DecodingError.dataCorruptedError(forKey: key, in: values,
+                                                           debugDescription: "Unknown resource card: \(id)")
+                }
+                return card
+            }
+        }
+        modules = try cards(order, for: .modules)
+        hidden = Set(try cards(hiddenIDs, for: .hidden))
+    }
+
     mutating func normalize() {
-        var seenMetrics: Set<StatusMetric> = []
+        var seenMetrics: Set<StatusIndicator> = []
         metrics = metrics.filter { seenMetrics.insert($0).inserted }
-        if inactiveMetricOrder != nil { inactiveMetricOrder = inactiveMetrics }
+        if metrics.isEmpty { metrics = [.battery] }
+        if inactiveMetricOrder != nil || !metrics.contains(.battery) { inactiveMetricOrder = inactiveMetrics }
         var seenModules: Set<ResourceModule> = []
         modules = (modules + ResourceModule.allCases).filter { seenModules.insert($0).inserted }
         width = max(Self.minimum.width, width)
@@ -95,7 +158,7 @@ struct CoreLoad: Identifiable, Equatable, Sendable {
     enum Kind: String, Sendable { case performance = "性能核", efficiency = "能效核", unknown = "核心" }
     let id: Int
     let kind: Kind
-    let usage: Double
+    let usage: Double?
 }
 struct MemoryReading: Equatable, Sendable {
     var used: UInt64
@@ -115,6 +178,11 @@ struct SystemReading: Equatable, Sendable {
     var battery: BatteryReading?
     var cpu: Double?
     var cores: [CoreLoad] = []
+    var computePhase = 0
+    var gpuCores: Int?
+    var gpuUsage: Double?
+    var neuralCores: Int?
+    var neuralActivity: Double?
     var memory: MemoryReading?
     var disk: DiskReading?
     var temperatures: [StatusMetric: Double] = [:]
@@ -131,14 +199,19 @@ struct SystemReading: Equatable, Sendable {
 
 struct ResourceDemand: Equatable, Sendable {
     var metrics: Set<StatusMetric>
+    var needsBattery: Bool
     var batteryDetail: Bool
     var batteryPanel: Bool
     var cores: Bool
     init(_ settings: SystemStatusSettings, panelVisible: Bool, details: Bool) {
-        metrics = settings.enabled ? Set(settings.metrics) : []
+        metrics = settings.enabled ? Set(settings.metrics.compactMap {
+            if case .metric(let metric) = $0 { return metric }
+            return nil
+        }) : []
         let visible = settings.enabled && panelVisible ? Set(settings.modules).subtracting(settings.hidden) : []
-        cores = visible.contains(.cpu)
+        cores = visible.contains(.compute)
         batteryPanel = visible.contains(.battery)
+        needsBattery = batteryPanel || (settings.enabled && settings.metrics.contains(.battery))
         batteryDetail = batteryPanel && details
         if cores { metrics.insert(.cpu) }
         if visible.contains(.memory) { metrics.insert(.memory) }
@@ -147,7 +220,7 @@ struct ResourceDemand: Equatable, Sendable {
     }
     func interval(charging: Bool) -> TimeInterval? {
         if metrics.contains(.cpu) { return 1 }
-        if metrics.contains(.memory) || metrics.contains(where: \.isTemperature) || batteryPanel || charging { return 3 }
+        if metrics.contains(.memory) || metrics.contains(where: \.isTemperature) || batteryPanel || (needsBattery && charging) { return 3 }
         return metrics.contains(.disk) ? 30 : nil
     }
 }

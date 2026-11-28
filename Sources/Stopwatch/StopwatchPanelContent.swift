@@ -11,11 +11,11 @@ class StopwatchFlippedView: PanelDragView {
 
 @MainActor
 final class StopwatchPanelContent: StopwatchFlippedView {
-    private static let preferredWidth: CGFloat = 556
-    private static let inset: CGFloat = 16
+    private static let preferredWidth: CGFloat = 452
+    private static let inset: CGFloat = 14
     private static let modeLabelWidth: CGFloat = 29
     private static let modeWidth: CGFloat = 108
-    private static let groupGap: CGFloat = 14
+    private static let groupGap: CGFloat = 10
 
     var onSelect: ((UUID) -> Void)?
     var onRename: ((UUID, String) -> Void)?
@@ -38,8 +38,7 @@ final class StopwatchPanelContent: StopwatchFlippedView {
     private var size: NSSize = .zero
     private struct Layout: Equatable {
         let width: CGFloat
-        let fullWidth: CGFloat
-        let totalWidth: CGFloat
+        let columns: StopwatchPanelRow.Columns
         let modeHint: String
         let shortcutWidths: [CGFloat]
         let shortcutHints: [String]
@@ -59,6 +58,7 @@ final class StopwatchPanelContent: StopwatchFlippedView {
         addButton.target = self
         addButton.action = #selector(addClicked)
         mode.segmentStyle = .rounded
+        mode.selectedSegmentBezelColor = .darkGray
         mode.target = self
         mode.action = #selector(modeClicked)
         mode.setWidth(50, forSegment: 0)
@@ -122,17 +122,16 @@ final class StopwatchPanelContent: StopwatchFlippedView {
             keycap.update(shortcut: data.shortcuts[keycap.action], recording: recording == keycap.action,
                           issue: inputIssues[keycap.action] ?? (recording == keycap.action ? nil : issues[keycap.action]))
         }
-        let fullWidth = data.readings.map { StopwatchPanelRow.fullWidth($0.time.full) }.max() ?? 0
-        let totalWidth = data.readings.map { StopwatchPanelRow.totalWidth($0.time.total) }.max() ?? 0
+        let columns = StopwatchPanelRow.Columns(data.readings)
         addButton.isHidden = rows.count >= StopwatchState.maximumCount
-        let minimumWidth = 2 * Self.inset + controlsWidth
+        let minimumWidth = 2 * Self.inset + max(columns.minimumWidth, controlsWidth)
         let width = min(availableWidth, max(Self.preferredWidth, minimumWidth))
-        let signature = Layout(width: width, fullWidth: fullWidth, totalWidth: totalWidth,
+        let signature = Layout(width: width, columns: columns,
                                modeHint: modeHint.stringValue, shortcutWidths: keycaps.map(\.width), shortcutHints: keycaps.map { $0.hint.stringValue },
                                hasSaveError: hasSaveError)
         if !sameRows || signature != layout {
             layout = signature
-            size = layoutContent(width: width, fullWidth: fullWidth, totalWidth: totalWidth)
+            size = layoutContent(width: width, columns: columns)
         }
         return size
     }
@@ -158,13 +157,13 @@ final class StopwatchPanelContent: StopwatchFlippedView {
         Self.modeLabelWidth + 6 + Self.modeWidth + keycaps.map(\.width).reduce(0, +) + 2 * Self.groupGap
     }
 
-    private func layoutContent(width: CGFloat, fullWidth: CGFloat, totalWidth: CGFloat) -> NSSize {
+    private func layoutContent(width: CGFloat, columns: StopwatchPanelRow.Columns) -> NSSize {
         let inset = Self.inset
         let inner = width - inset * 2
-        var y: CGFloat = 3
+        var y: CGFloat = 7
         for row in rows {
             row.frame = NSRect(x: inset, y: y, width: inner, height: 63)
-            row.arrange(fullWidth: fullWidth, totalWidth: totalWidth)
+            row.arrange(columns)
             y += 70
         }
         y += 8
@@ -183,7 +182,7 @@ final class StopwatchPanelContent: StopwatchFlippedView {
             saveHint.frame = NSRect(x: inset, y: y, width: inner, height: 16)
             y += 16
         }
-        return NSSize(width: width, height: y + 12)
+        return NSSize(width: width, height: y + 8)
     }
 
     private func positionHint(_ field: NSTextField, x: CGFloat, y: CGFloat, width: CGFloat) -> CGFloat {

@@ -1,5 +1,25 @@
 import SwiftUI
 
+enum SystemPanelLayout {
+    static let defaultWidth: CGFloat = 580
+    static let gridBreakpoint: CGFloat = 532
+    static let cellHeight: CGFloat = 110
+    static let gap: CGFloat = 10
+    static let sideInset: CGFloat = 12
+    static let bottomInset: CGFloat = 8
+    static let resetSpacing: CGFloat = 6
+    static let resetButtonHeight: CGFloat = 20
+    static var editingFooterHeight: CGFloat { resetSpacing + resetButtonHeight }
+
+    static func columns(for width: CGFloat) -> Int { width >= gridBreakpoint ? 2 : 1 }
+
+    static func heightToFit(width: CGFloat) -> CGFloat {
+        let grid = BoardGeometry(counts: [ResourceModule.allCases.count], width: width - 2 * sideInset,
+                                 columns: columns(for: width), cellHeight: cellHeight, gap: gap, header: 0)
+        return PanelChrome.headerHeight + grid.height + bottomInset
+    }
+}
+
 @MainActor
 struct SystemStatusView: View {
     @ObservedObject var model: SystemStatusController
@@ -10,52 +30,59 @@ struct SystemStatusView: View {
     var body: some View {
         GeometryReader { geometry in
             ScrollView {
-                if !modules.isEmpty {
-                    ReorderBoard(groups: [modules], columns: geometry.size.width >= 532 ? 2 : 1,
-                                 cellHeight: 118, gap: 10, editable: model.editing, commit: { groups in
-                        model.change { $0.modules = groups[0] }
-                    }, row: tile)
-                    .padding(.horizontal, 12).padding(.bottom, 12)
-                }
-                if model.editing {
-                    Button("恢复默认布局") {
-                        model.change { $0.modules = ResourceModule.allCases; $0.hidden.removeAll() }
-                    }.buttonStyle(.borderless).padding(.bottom, 12)
-                } else if modules.isEmpty {
-                    Button("选择显示模块") { model.editing = true }
-                        .padding()
-                }
+                VStack(spacing: 0) {
+                    if !modules.isEmpty {
+                        ReorderBoard(groups: [modules], columns: SystemPanelLayout.columns(for: geometry.size.width),
+                                     cellHeight: SystemPanelLayout.cellHeight, gap: SystemPanelLayout.gap, editable: model.editing, commit: { groups in
+                            model.change { $0.modules = groups[0] }
+                        }, row: tile)
+                        .padding(.horizontal, SystemPanelLayout.sideInset)
+                    }
+                    if model.editing {
+                        Button("恢复默认布局") {
+                            model.restoreLayout()
+                        }.buttonStyle(.borderless)
+                            .frame(height: SystemPanelLayout.resetButtonHeight)
+                            .padding(.top, SystemPanelLayout.resetSpacing)
+                    } else if modules.isEmpty {
+                        Button("选择显示模块") { model.editing = true }
+                            .padding()
+                    }
+                }.padding(.bottom, SystemPanelLayout.bottomInset)
             }.background { if !model.editing { PanelDragBackground() } }
         }
         .allowsWindowActivationEvents()
     }
 
     private func tile(_ module: ResourceModule) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: module == .compute ? 10 : 13) {
             HStack {
                 Text(module.title).font(.system(size: 13, weight: .semibold))
                 if module == .battery && !model.editing { BatteryInfoButton(model: model) }
                 Spacer()
+                if module == .compute && !model.editing {
+                    Text(ComputeCard.chip).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
                 if model.editing {
                     Button { model.change {
                         if $0.hidden.contains(module) { $0.hidden.remove(module) } else { $0.hidden.insert(module) }
                     } } label: {
                         Image(systemName: model.settings.hidden.contains(module) ? "eye.slash" : "eye")
                     }.reorderControl().accessibilityLabel((model.settings.hidden.contains(module) ? "显示" : "隐藏") + module.title)
-                    Image(systemName: "line.3.horizontal").foregroundStyle(.tertiary).help("拖动调整顺序")
                 }
             }.buttonStyle(.borderless)
             Group {
                 switch module {
                 case .battery: battery
-                case .cpu: cpu
+                case .compute: ComputeCard(reading: model.reading)
                 case .memory: memory
                 case .disk: disk
                 case .temperature: temperature
                 }
             }.opacity(model.editing && model.settings.hidden.contains(module) ? 0.4 : 1)
         }
-        .padding(13).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(EdgeInsets(top: 13, leading: 13, bottom: 12, trailing: 13))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(.background.opacity(0.58), in: RoundedRectangle(cornerRadius: 11))
         .overlay { RoundedRectangle(cornerRadius: 11).strokeBorder(.primary.opacity(0.08)).allowsHitTesting(false) }
         .background { if !model.editing { PanelDragBackground() } }
@@ -80,35 +107,6 @@ struct SystemStatusView: View {
                     }
                 }.font(.caption).foregroundStyle(.secondary).monospacedDigit()
             }
-        }
-    }
-
-    private var cpu: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            number(model.reading.statusValue(.cpu))
-            HStack(alignment: .bottom, spacing: 10) {
-                ForEach([CoreLoad.Kind.performance, .efficiency, .unknown], id: \.self) { kind in
-                    let cores = model.reading.cores.filter { $0.kind == kind }
-                    if !cores.isEmpty {
-                        VStack(alignment: .leading, spacing: 3) {
-                            HStack(alignment: .bottom, spacing: 2) {
-                                ForEach(cores) { core in
-                                    Rectangle().fill(.quaternary)
-                                        .overlay(alignment: .bottom) {
-                                            Rectangle().fill(kind == .performance ? Color.accentColor : Color.teal)
-                                                .frame(height: 19 * min(100, max(0, core.usage)) / 100)
-                                        }
-                                        .clipShape(Capsule())
-                                        .frame(maxWidth: 17).frame(height: 19)
-                                    .help("\(kind.rawValue) · 核心 \(core.id + 1) · \(Int(core.usage.rounded()))%")
-                                    .accessibilityLabel("核心 \(core.id + 1)，\(kind.rawValue)，\(Int(core.usage.rounded()))%")
-                                }
-                            }
-                            Text(kind.rawValue).font(.system(size: 10)).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }.frame(height: 35, alignment: .bottom)
         }
     }
 
@@ -182,7 +180,16 @@ struct SystemStatusToolbar: View {
         }
         .buttonStyle(.borderless)
         .font(.system(size: 12, weight: .medium))
-        .fixedSize()
+        .labelStyle(SystemToolbarLabelStyle())
         .allowsWindowActivationEvents()
+    }
+}
+
+private struct SystemToolbarLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        ViewThatFits(in: .horizontal) {
+            Label(configuration).labelStyle(.titleAndIcon).fixedSize()
+            configuration.title.fixedSize()
+        }
     }
 }

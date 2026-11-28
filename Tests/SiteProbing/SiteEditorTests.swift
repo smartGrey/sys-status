@@ -161,6 +161,7 @@ final class SiteEditorTests: XCTestCase {
         XCTAssertFalse(h.fresh.contains(where: \.stopped))
 
         let hover = HoverCard()
+        hover.showAllSites = true
         _ = hover.update(h.monitor.state, availableHeight: 240)
         let hoverContent = try XCTUnwrap(hover.contentView)
         let expectedNames = expected.map(\.name)

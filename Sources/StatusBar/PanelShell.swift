@@ -97,7 +97,7 @@ struct PanelControlRegion: NSViewRepresentable {
 /// A shared draggable header leaves controls, text editors and scroll views in their native responder chains.
 @MainActor
 final class PanelChrome: NSView {
-    static let headerHeight: CGFloat = 36
+    nonisolated static let headerHeight: CGFloat = 40
     let body: NSView
     private let header = PanelDragView()
     let pin = PanelPinButton()
@@ -164,14 +164,16 @@ final class PanelChrome: NSView {
         var titleRight = pin.frame.minX
         if let accessory {
             let size = accessory.fittingSize
-            accessory.frame = NSRect(x: pin.frame.minX - 8 - size.width, y: header.frame.midY - size.height / 2,
-                                     width: size.width, height: size.height)
+            let right = pin.frame.minX - 8
+            let width = min(size.width, max(0, right - 22 - title.intrinsicContentSize.width))
+            accessory.frame = NSRect(x: right - width, y: header.frame.midY - 2 - size.height / 2,
+                                     width: width, height: size.height)
             titleRight = accessory.frame.minX
         }
-        title.frame = NSRect(x: 16, y: header.frame.midY - 10, width: max(0, titleRight - 22), height: 20)
+        title.frame = NSRect(x: 16, y: header.frame.midY - 12, width: max(0, titleRight - 22), height: 20)
         if let leadingControl {
             let size = leadingControl.intrinsicContentSize
-            leadingControl.frame = NSRect(x: 16, y: header.frame.midY - size.height/2, width: size.width, height: size.height)
+            leadingControl.frame = NSRect(x: 16, y: header.frame.midY - 2 - size.height/2, width: size.width, height: size.height)
         }
         body.frame = NSRect(x: 0, y: 0, width: bounds.width, height: max(0,bounds.height-h))
     }

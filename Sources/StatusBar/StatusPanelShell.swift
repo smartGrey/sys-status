@@ -70,7 +70,12 @@ final class StatusPanelShell {
         }
         guard let anchor else { return }
         guard let screen = screens.first(where: { $0.frame.contains(anchor) }),
-              let rect = resolve(screen) else { hide(); return }
+              let rect = resolve(screen) else {
+            // A status item may temporarily disappear or move while its width
+            // changes. Keep a click-opened panel at its last valid position.
+            dismissPreview()
+            return
+        }
         self.anchor = rect
         content.follow(rect, screen)
     }

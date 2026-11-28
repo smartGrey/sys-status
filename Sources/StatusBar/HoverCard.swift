@@ -50,7 +50,9 @@ private final class HoverGrid: NSView {
 
 @MainActor
 private final class HoverSiteRow: NSView {
-    let name = label(size: 16)
+    private let name = label(size: 16)
+    let nameButton = SiteNameButton()
+    var openSite: ((String, NSView) -> Void)?
     let daily = ProbeTimingView()
     let fresh = ProbeTimingView()
     private let dot = NSImageView()
@@ -62,6 +64,9 @@ private final class HoverSiteRow: NSView {
         dot.symbolConfiguration = .init(pointSize: 9, weight: .regular)
         dot.frame = NSRect(x: 3, y: 11, width: 13, height: 13)
         name.frame = NSRect(x: 22, y: 5, width: HoverColumns.daily - 40, height: 24)
+        nameButton.frame = NSRect(x: 0, y: 0, width: HoverColumns.daily - HoverColumns.groupGap / 2, height: HoverColumns.rowHeight)
+        nameButton.target = self
+        nameButton.action = #selector(open)
         name.font = .systemFont(ofSize: 16, weight: .medium)
         name.textColor = .labelColor
         daily.setFrameOrigin(NSPoint(x: HoverColumns.daily, y: 0))
@@ -70,15 +75,18 @@ private final class HoverSiteRow: NSView {
             field.font = .monospacedDigitSystemFont(ofSize: 16, weight: .regular)
             field.frame = NSRect(x: column.x, y: 5, width: column.width, height: 24)
         }
-        for view in [dot, name, daily, fresh] + percentages { addSubview(view) }
+        for view in [dot, name, nameButton, daily, fresh] + percentages { addSubview(view) }
     }
     required init?(coder: NSCoder) { nil }
+
+    @objc private func open() { if let site { openSite?(site.id, nameButton) } }
 
     func update(_ row: ConnectivityState.Row) {
         site = row
         name.stringValue = row.name
-        name.setAccessibilityLabel(row.spoken)
-        name.toolTip = row.name
+        name.setAccessibilityElement(false)
+        nameButton.setAccessibilityLabel(row.spoken + "，快捷配置")
+        nameButton.toolTip = row.name + " · 快捷配置"
         dot.image = NSImage(systemSymbolName: row.enabled ? "circle.fill" : "circle", accessibilityDescription: nil)
         dot.contentTintColor = switch row.color {
         case .normal: .tertiaryLabelColor
@@ -116,6 +124,26 @@ private final class HoverButton: NSButton {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+private final class SiteNameButton: NSButton {
+    private var tracking: NSTrackingArea?
+    private var pointing = false { didSet { needsDisplay = true } }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: .zero, options: [.inVisibleRect, .activeAlways, .mouseEnteredAndExited], owner: self)
+        addTrackingArea(area)
+        tracking = area
+    }
+    override func mouseEntered(with event: NSEvent) { pointing = true }
+    override func mouseExited(with event: NSEvent) { pointing = false }
+    override func draw(_ dirtyRect: NSRect) {
+        guard pointing else { return }
+        NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)?
+            .draw(in: NSRect(x: bounds.maxX - 12, y: bounds.midY - 5, width: 10, height: 10))
+    }
+}
+
 @MainActor
 private enum BackgroundCursor {
     // A nonactivating panel needs WindowServer's permission to display its cursor.
@@ -141,6 +169,11 @@ private final class HoverDragSurface: PanelDragView {
     weak var card: HoverCard?
     private var pointerTracking: NSTrackingArea?
     private var backgroundCursorEnabled = false
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if let superview, card?.siteButton(at: superview.convert(point, to: nil)) != nil { return nil }
+        return super.hitTest(point)
+    }
 
     override func scrollWheel(with event: NSEvent) { card?.scrollTable(with: event) }
 
@@ -191,6 +224,8 @@ final class HoverCard: NSBox {
     private let footer = label()
     private var traffic = ""
     private let action = HoverButton(title: "立即探测", target: nil, action: nil)
+    private let configure = HoverButton(title: "探测配置", target: nil, action: nil)
+    private let allSites = HoverButton(checkboxWithTitle: "显示所有站点", target: nil, action: nil)
     private let pin = HoverButton()
     private let tableScroll = NSScrollView()
     private let grid = HoverGrid()
@@ -204,6 +239,11 @@ final class HoverCard: NSBox {
     private(set) var clock: Timer?
     var probeNow: (() -> Void)?
     var togglePin: (() -> Void)?
+    var openSettings: (() -> Void)?
+    var toggleSites: ((Bool) -> Void)?
+    var openSite: ((String, NSView) -> Void)?
+    var showAllSites = false
+    var trackingSiteID: String?
 
     init() {
         super.init(frame: .zero)
@@ -217,6 +257,10 @@ final class HoverCard: NSBox {
         contentView = NSView()
         heading.font = .systemFont(ofSize: 17, weight: .semibold)
         heading.textColor = .labelColor
+        configure.target = self
+        configure.action = #selector(settingsClicked)
+        allSites.target = self
+        allSites.action = #selector(filterClicked)
         action.controlSize = .large
         action.font = .systemFont(ofSize: 14)
         action.bezelStyle = .rounded
@@ -233,8 +277,7 @@ final class HoverCard: NSBox {
         dragSurface.autoresizingMask = [.width, .height]
         dragSurface.frame = contentView?.bounds ?? .zero
         setPinned(false)
-        // Keep both buttons in front of the single mouse target for the rest of the card.
-        for view in [heading, tableScroll, footer, dragSurface, action, pin] { contentView?.addSubview(view) }
+        for view in [heading, tableScroll, footer, dragSurface, configure, allSites, action, pin] { contentView?.addSubview(view) }
         for scroll in [tableScroll, bodyScroll] {
             scroll.drawsBackground = false
             scroll.scrollerStyle = .overlay
@@ -268,6 +311,8 @@ final class HoverCard: NSBox {
     }
 
     required init?(coder: NSCoder) { nil }
+    @objc private func settingsClicked() { openSettings?() }
+    @objc private func filterClicked() { toggleSites?(allSites.state == .on) }
     @objc private func probe() { probeNow?() }
     @objc private func togglePinned() { togglePin?() }
 
@@ -282,9 +327,17 @@ final class HoverCard: NSBox {
         pin.setAccessibilityLabel(title)
     }
 
+    fileprivate func siteButton(at point: NSPoint) -> NSButton? {
+        guard !tableScroll.isHidden else { return nil }
+        return rows.lazy.map(\.nameButton).first { button in
+            let local = button.convert(point, from: nil)
+            return button.bounds.contains(local) && button.visibleRect.contains(local)
+        }
+    }
+
     func canDrag(at pointInWindow: NSPoint) -> Bool {
         guard dragSurface.bounds.contains(dragSurface.convert(pointInWindow, from: nil)) else { return false }
-        return ![pin, action].contains { $0.bounds.contains($0.convert(pointInWindow, from: nil)) }
+        return siteButton(at: pointInWindow) == nil && ![pin, action, configure, allSites].contains { $0.bounds.contains($0.convert(pointInWindow, from: nil)) }
     }
 
     fileprivate func scrollTable(with event: NSEvent) {
@@ -355,20 +408,29 @@ final class HoverCard: NSBox {
 
     func update(_ state: ConnectivityState, availableHeight: CGFloat, availableWidth: CGFloat = .greatestFiniteMagnitude) -> NSSize {
         available = state.enabled && !state.configurationUnavailable
-        let sites = available ? state.rows : []
+        let sites = available ? state.rows.filter { showAllSites || $0.enabled || $0.id == trackingSiteID } : []
+        allSites.state = showAllSites ? .on : .off
         let inset: CGFloat = 18
         let width = min(availableWidth, sites.isEmpty ? 429 : HoverColumns.width + 2 * inset)
         let bodyHeight = CGFloat(sites.count) * HoverColumns.rowHeight
-        let chromeHeight: CGFloat = 99
+        let wrapped = width < 630
+        let footerHeight: CGFloat = wrapped ? 75 : 52
+        let chromeHeight = 47 + footerHeight
         let size = NSSize(width: width, height: min(availableHeight, sites.isEmpty ? chromeHeight : chromeHeight + HoverColumns.headerHeight + bodyHeight))
         heading.frame = NSRect(x: inset, y: size.height - 39, width: width - 80, height: 24)
         pin.frame = NSRect(x: width - 55, y: size.height - 46, width: 37, height: 35)
         traffic = state.footer
-        footer.frame = NSRect(x: inset, y: 17, width: max(0, width - 161), height: 22)
-        action.frame = NSRect(x: width - 131, y: 10, width: 114, height: 34)
+        configure.frame = NSRect(x: inset - 3, y: 10, width: 82, height: 34)
+        allSites.sizeToFit()
+        allSites.setFrameOrigin(NSPoint(x: configure.frame.maxX + 8, y: 27 - allSites.frame.height/2))
+        let footerX = wrapped ? inset : allSites.frame.maxX + 12
+        let footerEnd = wrapped ? width - inset : width - 139
+        footer.frame = NSRect(x: footerX, y: wrapped ? 45 : 16, width: max(0, footerEnd - footerX), height: 22)
+        let actionWidth: CGFloat = width < 370 ? 85 : 114
+        action.frame = NSRect(x: width - inset - actionWidth, y: 10, width: actionWidth, height: 34)
         tableScroll.isHidden = sites.isEmpty
         let gridHeight = max(0, size.height - chromeHeight)
-        tableScroll.frame = NSRect(x: inset, y: 52, width: max(0, width - 2 * inset), height: gridHeight)
+        tableScroll.frame = NSRect(x: inset, y: footerHeight, width: max(0, width - 2 * inset), height: gridHeight)
         tableScroll.hasHorizontalScroller = tableScroll.frame.width < HoverColumns.width
         grid.frame.size = NSSize(width: HoverColumns.width, height: gridHeight)
         bodyScroll.frame = NSRect(x: 0, y: HoverColumns.headerHeight, width: HoverColumns.width,
@@ -379,6 +441,7 @@ final class HoverCard: NSBox {
         for (index, site) in sites.enumerated() {
             if index == rows.count {
                 let row = HoverSiteRow()
+                row.openSite = { [weak self] id, view in self?.openSite?(id, view) }
                 row.setFrameOrigin(NSPoint(x: 0, y: CGFloat(index) * HoverColumns.rowHeight))
                 body.addSubview(row)
                 rows.append(row)

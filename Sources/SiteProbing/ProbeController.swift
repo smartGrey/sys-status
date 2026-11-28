@@ -8,9 +8,14 @@ final class ProbeController: NSObject {
         configurationStore.configuration ?? ProbeConfiguration(probingEnabled: false, sites: ProbeSite.builtIns)
     }
     private var siteWindow: SiteSettingsWindow?
-    private var probeItem: StatusMenuToggleItem!
-    private var siteMenuLayout: [SiteMenuLayout] = []
-    private let siteMenuStart = NSMenuItem.separator()
+    private var activeSite: (layout: SiteMenuLayout, item: NSMenuItem)?
+    private lazy var moduleSwitch: StatusMenuToggleItem = {
+        let item = StatusMenuToggleItem.make(title: StatusModule.network.title, action: #selector(toggleProbing))
+        item.target = self
+        item.setAccessibilityHelp(HelpField.global.tip())
+        return item
+    }()
+    var menuItem: NSMenuItem { moduleSwitch }
 
     var didUpdate: (() -> Void)?
     private(set) lazy var monitor = ConnectivityMonitor(sites: configuration.sites, enabled: configuration.probingEnabled) { [weak self] in
@@ -33,54 +38,33 @@ final class ProbeController: NSObject {
         } catch {
             configurationError = error
         }
+        refreshMenu()
     }
 
-    func addItems(to menu: NSMenu) {
-        probeItem = StatusMenuToggleItem.make(title: "启用站点探测", action: #selector(toggleProbing))
-        menu.addItem(probeItem)
-        probeItem.target = self
-        probeItem.toolTip = HelpField.global.tip()
-        probeItem.setAccessibilityHelp(HelpField.global.tip())
-        let sites = menu.addItem(withTitle: "探测站点配置", action: #selector(configureSites), keyEquivalent: "")
-        sites.target = self
-        menu.addItem(siteMenuStart)
-        refreshSiteMenu(menu, rebuilding: true)
-    }
-
-    func refreshSiteMenu(_ menu: NSMenu, rebuilding: Bool = false) {
-        let loaded = configuration
-        let available = configurationError == nil
-        probeItem.state = loaded.probingEnabled ? .on : .off
-        probeItem.isEnabled = available
-        probeItem.refreshRow()
-        let layout = loaded.sites.map(SiteMenuLayout.init)
-        let entries = menu.items.filter { $0.representedObject is String && $0.hasSubmenu }
-        if rebuilding && layout != siteMenuLayout {
-            entries.forEach { menu.removeItem($0) }
-            let start = menu.index(of: siteMenuStart) + 1
-            for (offset, site) in loaded.sites.enumerated() {
-                let entry = SiteProbeCommand.menuItem(for: site, target: self, action: #selector(changeSite(_:)))
-                entry.isEnabled = available
-                menu.insertItem(entry, at: start + offset)
-            }
-            siteMenuLayout = layout
+    private func refreshMenu() {
+        moduleSwitch.state = configurationError == nil && configuration.probingEnabled ? .on : .off
+        moduleSwitch.toolTip = configurationError == nil ? HelpField.global.tip() : "打开探测配置以修复配置文件"
+        moduleSwitch.refreshRow()
+        guard let activeSite else { return }
+        guard let site = configuration.sites.first(where: { $0.id == activeSite.layout.id }),
+              SiteMenuLayout(site) == activeSite.layout else {
+            activeSite.item.submenu?.cancelTrackingWithoutAnimation()
             return
         }
-        let sites = Dictionary(uniqueKeysWithValues: zip(layout.map(\.id), loaded.sites.indices))
-        for (entry, previous) in zip(entries, siteMenuLayout) {
-            guard let index = sites[previous.id], layout[index] == previous else {
-                entry.isEnabled = false
-                entry.submenu?.items.forEach {
-                    $0.isEnabled = false
-                    ($0 as? StatusMenuToggleItem)?.refreshRow()
-                }
-                continue
-            }
-            SiteProbeCommand.refreshMenuItem(entry, for: loaded.sites[index], available: available)
-        }
+        SiteProbeCommand.refreshMenuItem(activeSite.item, for: site, available: configurationError == nil)
     }
 
-    @objc private func configureSites() { _ = presentSiteSettings() }
+    func withSiteMenu(id: String, present: (NSMenu) -> Void) {
+        guard activeSite == nil, configurationError == nil,
+              let site = configuration.sites.first(where: { $0.id == id }) else { return }
+        let item = SiteProbeCommand.menuItem(for: site, target: self, action: #selector(changeSite(_:)))
+        guard let menu = item.submenu else { return }
+        activeSite = (SiteMenuLayout(site), item)
+        defer { activeSite = nil }
+        present(menu)
+    }
+
+    func configureSites() { _ = presentSiteSettings() }
 
     private func presentSiteSettings() -> SiteSettingsWindow {
         if let siteWindow {
@@ -124,17 +108,20 @@ final class ProbeController: NSObject {
             }
             OperationFeedback.menu.show(message)
         } catch {
-            showConfigurationError(error)
+            showConfigurationError(error, from: sender as? StatusMenuToggleItem)
         }
     }
 
     @objc private func toggleProbing() {
-        guard configurationError == nil else { return }
+        guard configurationError == nil else {
+            moduleSwitch.afterClosingMenu { [weak self] in self?.configureSites() }
+            return
+        }
         var updated = configuration
         updated.probingEnabled.toggle()
         do {
             try saveConfiguration(updated)
-            OperationFeedback.menu.show(updated.probingEnabled ? "站点探测已启用" : "站点探测已暂停")
+            OperationFeedback.menu.show(updated.probingEnabled ? "网络状况已开启" : "网络状况已关闭")
         } catch {
             showConfigurationError(error)
         }
@@ -147,13 +134,13 @@ final class ProbeController: NSObject {
 
     private func applyConfiguration() {
         configurationError = nil
-        if let menu = probeItem.menu { refreshSiteMenu(menu) }
+        refreshMenu()
         monitor.apply(configuration)
         siteWindow?.syncMenu(configuration)
     }
 
-    private func showConfigurationError(_ error: Error) {
-        probeItem.afterClosingMenu { [self] in
+    private func showConfigurationError(_ error: Error, from sender: StatusMenuToggleItem? = nil) {
+        (sender ?? moduleSwitch).afterClosingMenu { [self] in
             NSApp.activate()
             let alert = NSAlert(error: error)
             alert.informativeText = configurationStore.url.path(percentEncoded: false)

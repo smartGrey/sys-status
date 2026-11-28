@@ -10,8 +10,19 @@ final class NetworkPanel {
         let card = HoverCard()
         card.probeNow = { [weak self] in self?.probeNow?() }
         card.togglePin = { [weak self] in self?.window?.togglePinned?() }
+        card.openSettings = { [weak self] in self?.configure?() }
+        card.toggleSites = { [weak self] value in
+            guard let self else { return }
+            if setShowAllSites?(value) == true { showAllSites = value }
+            layout()
+        }
+        card.openSite = { [weak self] id, view in self?.presentSite(id, from: view) }
         return card
     }()
+    var configure: (() -> Void)?
+    var showAllSites = false
+    var setShowAllSites: ((Bool) -> Bool)?
+    var openSite: ((String, NSView) -> Void)?
     var readTimeline: () -> ProbeTimeline = { ProbeTimeline() }
     var probeNow: (() -> Void)?
     var setTooltip: ((String?) -> Void)?
@@ -24,6 +35,12 @@ final class NetworkPanel {
             self?.layout()
         })
     }
+    private func presentSite(_ id: String, from view: NSView) {
+        card.trackingSiteID = id
+        defer { card.trackingSiteID = nil; layout() }
+        openSite?(id, view)
+    }
+
     func refreshTiming() {
         if anchor != nil { card.setTimeline(readTimeline()) }
     }
@@ -53,6 +70,7 @@ final class NetworkPanel {
         guard let window, let anchor, let screen = (window.isMovable ? window.screen : nil) ?? screen else { return }
         let bounds = screen.visibleFrame
         let height = window.isMovable ? bounds.height : StatusPanelGeometry.top(under: anchor, within: bounds) - bounds.minY
+        card.showAllSites = showAllSites
         let size = card.update(connectivity, availableHeight: height, availableWidth: bounds.width)
         let frame = window.isMovable ? StatusPanelGeometry.pinnedFrame(size: size, previous: window.frame, within: bounds)
             : StatusPanelGeometry.frame(size: size, under: anchor, within: bounds)
@@ -71,6 +89,7 @@ final class NetworkPanel {
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = true
+        window.protectsInteraction = { [weak card] in card?.trackingSiteID != nil }
         window.contentView = card
         window.pinChanged = { [weak card] in card?.setPinned($0) }
         return window

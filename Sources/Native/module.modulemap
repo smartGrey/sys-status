@@ -1,5 +1,6 @@
 module NetRateNative {
     header "../SiteProbing/HeaderSession.h"
     header "../Hearing/AudioCore/HearingAudio.h"
+    header "../SystemStatus/ANEActivityReader.h"
     export *
 }

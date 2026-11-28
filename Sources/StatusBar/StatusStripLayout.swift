@@ -6,7 +6,7 @@ enum StatusModule: String, CaseIterable, Codable, Identifiable {
     var title: String {
         switch self {
         case .hearing: "监听环境音"
-        case .network: "网速"
+        case .network: "网络状况"
         case .stopwatch: "秒表"
         case .system: "系统状态"
         }
@@ -26,7 +26,7 @@ struct StatusStripLayout {
         let width: CGFloat
     }
     static let moduleGap: CGFloat = 8
-    static let inset: CGFloat = 3
+    static let inset: CGFloat = 6
     let slots: [Slot]
     let width: CGFloat
 
@@ -43,7 +43,7 @@ struct StatusStripLayout {
             x += width
         }
         slots = next
-        width = x + Self.inset
+        width = next.isEmpty ? 22 : x + Self.inset
     }
 
     func region(_ part: StatusModule, in frame: CGRect) -> CGRect? {

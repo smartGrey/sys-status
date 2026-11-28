@@ -31,7 +31,7 @@ struct BatteryInfoButton: View {
                     detail("满充容量", battery?.fullCapacity, " mAh")
                     detail("设计容量", battery?.designCapacity, " mAh")
                 }
-            }.fixedSize().frame(minWidth: 168, alignment: .leading).padding(12).contentShape(Rectangle())
+            }.fixedSize().padding(12).contentShape(Rectangle())
             .onHover { overBubble = $0; schedule() }
         }
         .onChange(of: model.details) { _, open in

@@ -12,8 +12,8 @@ final class SystemStatusTests: XCTestCase {
         XCTAssertNil(idle.interval(charging: false))
         XCTAssertFalse(idle.batteryDetail)
         XCTAssertNotNil(idle.interval(charging: true))
-        settings.hidden = [.cpu, .temperature, .battery]
-        settings.metrics = [.gpuTemperature, .cpu]
+        settings.hidden = [.temperature, .battery, .compute]
+        settings.metrics = [.metric(.gpuTemperature), .metric(.cpu)]
         let active = ResourceDemand(settings, panelVisible: true, details: true)
         XCTAssertEqual(active.metrics, [.cpu, .gpuTemperature, .memory, .disk])
         XCTAssertFalse(active.cores)
@@ -28,18 +28,50 @@ final class SystemStatusTests: XCTestCase {
         XCTAssertEqual(controller.menuItem.state, .off)
         XCTAssertTrue(controller.change {
             $0.enabled = true
-            $0.metrics = [.disk,.memory,.cpu,.memory]
+            $0.metrics = [.metric(.disk), .metric(.memory), .metric(.cpu), .metric(.memory)]
             $0.metrics.swapAt(0, 2)
-            $0.modules = [.temperature,.battery,.cpu,.battery]
+            $0.modules = [.temperature,.battery,.compute,.battery]
             $0.hidden = [.disk]
             $0.width = 400
         })
         let restored = SystemStatusController(url: url)
         restored.restore()
         XCTAssertEqual(restored.settings, controller.settings)
-        XCTAssertEqual(restored.settings.metrics, [.cpu,.memory,.disk])
-        XCTAssertEqual(restored.settings.modules, [.temperature,.battery,.cpu,.memory,.disk])
+        XCTAssertEqual(restored.settings.metrics, [.metric(.cpu), .metric(.memory), .metric(.disk)])
+        XCTAssertEqual(restored.settings.modules, [.temperature,.battery,.compute,.memory,.disk])
         XCTAssertEqual(restored.menuItem.state, .on)
+    }
+
+    func testRemovingCPUCardPreservesLayoutAcrossUpgradeAndSave() throws {
+        let url = AppDataFile.systemStatus.url(in: try temporaryDirectory())
+        let legacy = ["memory", "cpu", "disk", "battery", "temperature"]
+        let modern = legacy + ["compute"]
+        for order in [legacy, modern] {
+            for hidden in [[], ["cpu"], ["compute"], ["compute", "cpu"]] as [[String]] {
+                let saved: [String: Any] = ["version": 1, "enabled": true, "metrics": ["cpu"], "metricColors": ["cpu": "rose"],
+                                             "modules": order, "hidden": hidden + ["disk"], "width": 470, "height": 355]
+                try JSONSerialization.data(withJSONObject: saved).write(to: url)
+                let controller = SystemStatusController(url: url)
+                controller.restore()
+                let hasCompute = order == modern
+                let expected: [ResourceModule] = hasCompute ? [.memory,.disk,.battery,.temperature,.compute]
+                                                           : [.memory,.compute,.disk,.battery,.temperature]
+                let settings = controller.settings
+                XCTAssertEqual(settings.modules, expected)
+                XCTAssertTrue(settings.hidden.contains(.disk))
+                XCTAssertEqual(settings.hidden.contains(.compute), hidden.contains("compute") || (!hasCompute && hidden.contains("cpu")))
+                XCTAssertEqual(settings.metrics, [.battery, .metric(.cpu)])
+                XCTAssertEqual(settings.color(for: .cpu), .rose)
+                XCTAssertEqual(settings.width, 470)
+                XCTAssertEqual(settings.height, 355)
+                XCTAssertTrue(controller.change { $0.width += 1 })
+                let file = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+                for key in ["modules", "hidden"] { XCTAssertFalse(try XCTUnwrap(file[key] as? [String]).contains("cpu")) }
+                let reopened = SystemStatusController(url: url)
+                reopened.restore()
+                XCTAssertEqual(reopened.settings, controller.settings)
+            }
+        }
     }
 
     func testLegacyMetricSettingsKeepSelectionAndRememberPaletteAndInactiveOrder() throws {
@@ -48,21 +80,54 @@ final class SystemStatusTests: XCTestCase {
         try Data(legacy.utf8).write(to: url)
         let model = SystemStatusController(url: url)
         model.restore()
-        XCTAssertEqual(model.settings.metrics, [.memory, .cpu])
-        XCTAssertEqual(model.settings.inactiveMetrics, [.disk, .cpuTemperature, .gpuTemperature, .batteryTemperature])
+        XCTAssertEqual(model.settings.metrics, [.battery, .metric(.memory), .metric(.cpu)])
+        XCTAssertEqual(model.settings.inactiveMetrics, [.metric(.disk), .metric(.cpuTemperature), .metric(.gpuTemperature), .metric(.batteryTemperature)])
         XCTAssertEqual(model.settings.color(for: .cpu), .standard(for: .cpu))
         XCTAssertEqual(MetricColor.allCases.count, 12)
         model.change {
-            $0.metrics = []
-            $0.inactiveMetricOrder = [.memory, .cpu, .batteryTemperature]
+            $0.metrics = [.battery]
+            $0.inactiveMetricOrder = [.metric(.memory), .metric(.cpu), .metric(.batteryTemperature)]
             $0.metricColors = ["cpu": .rose, "memory": .rose]
         }
         let restored = SystemStatusController(url: url)
         restored.restore()
         XCTAssertEqual(restored.settings, model.settings)
-        XCTAssertEqual(restored.settings.inactiveMetrics.prefix(3), [.memory, .cpu, .batteryTemperature])
+        XCTAssertEqual(restored.settings.inactiveMetrics.prefix(3), [.metric(.memory), .metric(.cpu), .metric(.batteryTemperature)])
         XCTAssertEqual(restored.settings.color(for: .cpu), .rose)
         XCTAssertEqual(restored.settings.color(for: .memory), .rose)
+    }
+
+    func testBatteryPositionAndVisibilitySurviveReopening() throws {
+        let url = AppDataFile.systemStatus.url(in: try temporaryDirectory())
+        let controller = SystemStatusController(url: url)
+        let disk = StatusIndicator.metric(.disk), cpu = StatusIndicator.metric(.cpu)
+        XCTAssertFalse(controller.settings.canMoveIndicator(.battery))
+        for order in [[.battery, disk, cpu], [disk, .battery, cpu], [disk, cpu, .battery], [disk]] {
+            controller.change {
+                $0.enabled = true
+                $0.metrics = order
+                $0.inactiveMetricOrder = [cpu, .battery]
+            }
+            let reopened = SystemStatusController(url: url)
+            reopened.restore()
+            let settings = reopened.settings
+            XCTAssertEqual(settings, controller.settings)
+            XCTAssertEqual(settings.metrics, order)
+            XCTAssertEqual(settings.inactiveMetrics.contains(.battery), !order.contains(.battery))
+            XCTAssertEqual(settings.canMoveIndicator(disk), order.count > 1)
+            XCTAssertTrue(settings.canMoveIndicator(.battery))
+            let demand = ResourceDemand(settings, panelVisible: false, details: false)
+            XCTAssertEqual(demand.needsBattery, order.contains(.battery))
+            if order == [disk] {
+                XCTAssertEqual(demand.interval(charging: true), 30)
+                XCTAssertTrue(ResourceDemand(settings, panelVisible: true, details: false).batteryPanel)
+            }
+        }
+        var empty = controller.settings
+        empty.metrics = []
+        empty.normalize()
+        XCTAssertEqual(empty.metrics, [.battery])
+        XCTAssertFalse(empty.inactiveMetrics.contains(.battery))
     }
 
     func testReorderPreviewAcrossMidpointsEmptySectionsAndOutsideBoard() {
@@ -73,7 +138,7 @@ final class SystemStatusTests: XCTestCase {
         XCTAssertEqual(list.destination(at: CGPoint(x: 90, y: second.midY+1), groups: groups, moving: 1), [[2, 1], []])
         XCTAssertEqual(list.destination(at: CGPoint(x: 90, y: list.top(1) + list.header/2), groups: groups, moving: 2), [[1], [2]])
         XCTAssertNil(list.destination(at: CGPoint(x: -1, y: 40), groups: groups, moving: 1))
-        let grid = BoardGeometry(counts: [5], width: 560, columns: 2, cellHeight: 118, gap: 10, header: 0)
+        let grid = BoardGeometry(counts: [5], width: 560, columns: 2, cellHeight: SystemPanelLayout.cellHeight, gap: 10, header: 0)
         let end = grid.cell(0, 4)
         XCTAssertEqual(end.width, grid.cell(0, 0).width)
         XCTAssertEqual(grid.destination(at: CGPoint(x: end.midX+2, y: end.midY), groups: [[1,2,3,4,5]], moving: 2),
@@ -94,7 +159,7 @@ final class SystemStatusTests: XCTestCase {
         XCTAssertEqual(prefs.order, entry.moduleOrder)
         let widths: [StatusModule: CGFloat] = [.hearing: 16, .network: 34, .stopwatch: 23, .system: 95]
         func verify(_ prefix: [StatusModule], _ rest: [StatusModule]) throws {
-            if prefix.contains(.network) {
+            if !prefix.isEmpty {
                 let layout = StatusStripLayout(order: prefix, widths: widths)
                 let frame = CGRect(x: -310, y: 200, width: layout.width+6, height: 24)
                 var edge = frame.minX
@@ -109,6 +174,79 @@ final class SystemStatusTests: XCTestCase {
             for item in rest { try verify(prefix + [item], rest.filter { $0 != item }) }
         }
         try verify([], StatusModule.allCases)
+        let empty = StatusStripLayout(order: StatusModule.allCases, widths: [:])
+        XCTAssertTrue(empty.slots.isEmpty)
+        XCTAssertEqual(empty.width, 22)
+    }
+
+    func testComputeDemandAndAdaptiveLayoutReset() throws {
+        let controller = SystemStatusController(url: AppDataFile.systemStatus.url(in: try temporaryDirectory()))
+        controller.change {
+            $0.enabled = true
+            $0.hidden = Set(ResourceModule.allCases).subtracting([.compute])
+            $0.width = 300
+            $0.height = 200
+        }
+        let panel = ResourceDemand(controller.settings, panelVisible: true, details: false)
+        XCTAssertTrue(panel.cores)
+        XCTAssertEqual(panel.metrics, [.cpu])
+        XCTAssertFalse(ResourceDemand(controller.settings, panelVisible: false, details: false).cores)
+        controller.editing = true
+        controller.restoreLayout()
+        XCTAssertTrue(controller.settings.hidden.isEmpty)
+        XCTAssertEqual(controller.settings.width, 580)
+        XCTAssertEqual(controller.settings.height, SystemPanelLayout.heightToFit(width: 532))
+        XCTAssertEqual(controller.settings.height, 40 + 3 * 110 + 2 * 10 + 8)
+        XCTAssertEqual(SystemPanelLayout.heightToFit(width: 531), 40 + 5 * 110 + 4 * 10 + 8)
+    }
+
+    func testResetFitsCardsAfterEditingAndReopening() throws {
+        let screen = try XCTUnwrap(NSScreen.main)
+        let url = AppDataFile.systemStatus.url(in: try temporaryDirectory())
+        let controller = SystemStatusController(url: url)
+        controller.change { $0.enabled = true; $0.height = 550 }
+        let panel = controller.panelContent
+        defer { panel.close() }
+        let anchor = CGRect(x: screen.visibleFrame.midX, y: screen.visibleFrame.maxY, width: 40, height: 22)
+        let window = try XCTUnwrap(panel.show(anchor, screen, false))
+        controller.editing = true
+        controller.restoreLayout()
+        let normal = controller.settings.height
+        XCTAssertEqual(window.frame.height, normal + SystemPanelLayout.editingFooterHeight)
+        controller.editing = false
+        XCTAssertEqual(window.frame.height, normal)
+        controller.editing = true
+        controller.restoreLayout()
+        panel.close()
+        let reopened = try XCTUnwrap(panel.show(anchor, screen, false))
+        XCTAssertEqual(reopened.frame.height, normal)
+        controller.editing = true
+        reopened.setContentSize(CGSize(width: 540, height: normal + SystemPanelLayout.editingFooterHeight + 20))
+        let delegate = try XCTUnwrap(reopened.delegate as? SystemStatusPanel)
+        delegate.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification, object: reopened))
+        controller.editing = false
+        XCTAssertEqual(reopened.frame.height, normal + 20)
+        let restored = SystemStatusController(url: url)
+        restored.restore()
+        XCTAssertEqual(restored.settings.height, normal + 20)
+    }
+
+    func testLegacyStripOrderSurvivesSiteVisibilityChanges() throws {
+        let url = AppDataFile.preferences.url(in: try temporaryDirectory())
+        try AppDataFile.write(["system", "stopwatch", "network", "hearing"], to: url)
+        let prefs = StatusPreferences(url: url)
+        prefs.restore()
+        XCTAssertEqual(prefs.order, [.system, .stopwatch, .network, .hearing])
+        XCTAssertFalse(prefs.showAllSites)
+        XCTAssertTrue(prefs.setShowAllSites(true))
+        let reopened = StatusPreferences(url: url)
+        reopened.restore()
+        XCTAssertEqual(reopened.order, prefs.order)
+        XCTAssertTrue(reopened.showAllSites)
+        reopened.save([.network])
+        prefs.restore()
+        XCTAssertTrue(prefs.showAllSites)
+        XCTAssertEqual(prefs.order.first, .network)
     }
 
     func testBatteryFootprintAndStatusRegion() throws {
@@ -116,9 +254,17 @@ final class SystemStatusTests: XCTestCase {
         reading.battery = BatteryReading(percent: 99)
         let entry = StatusEntry()
         defer { entry.removeForExit() }
-        func face(_ metrics: [StatusMetric] = []) -> SystemStatusFace { .init(reading: reading, metrics: metrics) }
+        func face(_ metrics: [StatusIndicator] = [.battery]) -> SystemStatusFace { .init(reading: reading, metrics: metrics) }
         let initial = entry.item.length
         let compact = face().width
+        let cpuAfterBattery = face([.battery, .metric(.cpu)]).width - compact
+        let cpuAfterMemory = face([.metric(.memory), .metric(.cpu)]).width - face([.metric(.memory)]).width
+        XCTAssertEqual(cpuAfterBattery, cpuAfterMemory + 1)
+        XCTAssertEqual(face([.metric(.cpu), .battery]).width, face([.battery, .metric(.cpu)]).width)
+        let cpu = StatusIndicator.metric(.cpu), memory = StatusIndicator.metric(.memory)
+        XCTAssertEqual(face([cpu, .battery, memory]).width, face([cpu]).width + compact + face([memory]).width + 10)
+        XCTAssertEqual(face([cpu, .battery, memory]).spoken, "CPU 占用率 —，电池 99%，内存用量 —")
+        let hiddenBattery = face([cpu, memory])
         entry.updateSystem(face())
         XCTAssertEqual(entry.item.length, initial + StatusStripLayout.moduleGap + compact)
         reading.battery?.percent = 100
@@ -134,7 +280,8 @@ final class SystemStatusTests: XCTestCase {
         reading.battery?.full = true
         XCTAssertLessThan(face().width, chargeWidth)
         XCTAssertTrue(face().spoken.contains("已接电"))
-        entry.updateSystem(face([.gpuTemperature,.cpu]))
+        XCTAssertEqual(face([cpu, memory]), hiddenBattery)
+        entry.updateSystem(face([.metric(.gpuTemperature), .battery, .metric(.cpu)]))
         let frame = NSRect(x: 10, y: 10, width: entry.item.length + 8, height: 24)
         let system = try XCTUnwrap(entry.region(.system, of: frame))
         XCTAssertEqual(system.minX, entry.networkRegion(of: frame).maxX)
@@ -147,7 +294,7 @@ final class SystemStatusTests: XCTestCase {
         var reading = SystemReading()
         for metric in StatusMetric.allCases { XCTAssertEqual(reading.statusValue(metric), "—") }
         reading.hasBattery = false
-        XCTAssertEqual(SystemStatusFace(reading: reading, metrics: []).spoken, "系统状态")
+        XCTAssertEqual(SystemStatusFace(reading: reading, metrics: [.battery]).spoken, "系统状态")
         var battery = BatteryReading(percent: 94)
         XCTAssertEqual(battery.timeLabel, "估算中")
         battery.minutes = 91
@@ -162,7 +309,7 @@ final class SystemStatusTests: XCTestCase {
         reading.battery = battery
         reading.hasBattery = true
         reading.temperatures = [.cpuTemperature: 55.8]
-        let face = SystemStatusFace(reading: reading, metrics: [.cpuTemperature, .gpuTemperature])
+        let face = SystemStatusFace(reading: reading, metrics: [.battery, .metric(.cpuTemperature), .metric(.gpuTemperature)])
         XCTAssertEqual(face.spoken, "电池 94%，充电 32W，CPU 温度 56°，GPU 温度 —")
     }
 
@@ -203,6 +350,10 @@ final class SystemStatusTests: XCTestCase {
         let window = try XCTUnwrap(NSApp.windows.first { $0.title == "网络状况" && $0.isVisible } as? StatusPanelWindow)
         XCTAssertTrue(first.previewing)
         first.click(under: anchor, on: screen)
+        XCTAssertTrue(first.opened)
+        XCTAssertTrue(window.isVisible)
+        // AppKit can briefly have no frame for the status item during layout.
+        first.trackAnchor { _ in nil }
         XCTAssertTrue(first.opened)
         XCTAssertTrue(window.isVisible)
         let next = anchor.offsetBy(dx: 85, dy: 0)

@@ -19,6 +19,7 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
 
     let item: NSStatusItem
     private var face = StatusFace()
+    private var networkEnabled = true
     private var watch: StopwatchStatusFace?
     private var focusTransition: StopwatchStatusFace.FocusTransition?
     private var focusTimer: Timer?
@@ -41,12 +42,13 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
         item = NSStatusBar.system.statusItem(withLength: width)
         super.init()
         item.autosaveName = "NetRate"
-        item.button?.setAccessibilityLabel("网速")
+        item.button?.setAccessibilityLabel(StatusModule.network.title)
     }
 
     var isSplit: Bool { watch != nil || hearing != nil || systemFace != nil }
     private var layout: StatusStripLayout {
-        var widths: [Region: CGFloat] = [.network: face.width]
+        var widths: [Region: CGFloat] = [:]
+        if networkEnabled { widths[.network] = face.width }
         widths[.hearing] = hearing.map { _ in StatusIconState.size.width }
         widths[.stopwatch] = watch?.width
         widths[.system] = systemFace?.width
@@ -98,7 +100,15 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
     func updateNetwork(speed: Speed?, connectivity: ConnectivityState) {
         guard !removed else { return }
         let imageChanged = face.update(speed: speed, connectivity: connectivity)
-        if imageChanged { draw() }
+        let changed = networkEnabled != connectivity.enabled
+        networkEnabled = connectivity.enabled
+        if changed {
+            item.length = totalWidth
+            configureInput()
+            onModulesChanged?()
+            layoutChanged()
+        }
+        if imageChanged || changed { draw() }
         updateAccessibility()
     }
 
@@ -181,16 +191,16 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
     }
 
     func networkRegion(of frame: NSRect) -> NSRect {
-        region(.network, of: frame) ?? frame
+        region(.network, of: frame) ?? .zero
     }
 
     func region(_ part: Region, of frame: NSRect) -> NSRect? {
         layout.region(part, in: frame)
     }
 
-    private func target(at point: NSPoint, in frame: NSRect) -> Region {
+    private func target(at point: NSPoint, in frame: NSRect) -> Region? {
         let layout = self.layout
-        return layout.slots.first { layout.region($0.module, in: frame)?.contains(point) == true }?.module ?? .network
+        return layout.slots.first { layout.region($0.module, in: frame)?.contains(point) == true }?.module
     }
 
     // Only exempt an actual button from outside-click dismissal. A projection on
@@ -208,14 +218,14 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
     private func draw() {
         let amounts = focusTransition?.amounts(at: ProcessInfo.processInfo.systemUptime)
         if focusTransition != nil, amounts == nil { finishFocusTransition() }
-        guard let image = face.renderedImage else { return }
         let layout = self.layout
-        var images: [Region: NSImage] = [.network: image]
+        var images: [Region: NSImage] = [:]
+        images[.network] = face.renderedImage
         images[.system] = systemImage
         images[.hearing] = hearingImage
         images[.stopwatch] = watch?.image(focusAmounts: amounts)
         let native = usesNativeHighlight
-        item.button?.image = NSImage(size: NSSize(width: layout.width, height: 22), flipped: false) { bounds in
+        item.button?.image = NSImage(size: NSSize(width: layout.width, height: NSStatusBar.system.thickness), flipped: false) { bounds in
             if !native {
                 NSGraphicsContext.saveGraphicsState()
                 let shadow = NSShadow()
@@ -223,10 +233,14 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
                 shadow.shadowOffset = NSSize(width: 0, height: -0.5)
                 shadow.shadowColor = NSColor.black.withAlphaComponent(0.19)
                 shadow.set()
-                let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 1), xRadius: 6, yRadius: 6)
+                let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.25, dy: 0), xRadius: 6, yRadius: 6)
                 NSColor.labelColor.withAlphaComponent(0.16).setFill()
                 shape.fill()
                 NSGraphicsContext.restoreGraphicsState()
+            }
+            if layout.slots.isEmpty {
+                let icon = NSImage(systemSymbolName: "menubar.rectangle", accessibilityDescription: nil)
+                icon?.draw(in: NSRect(x: bounds.midX-7, y: bounds.midY-7, width: 14, height: 14))
             }
             for slot in layout.slots {
                 guard let part = images[slot.module] else { continue }
@@ -297,7 +311,7 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
         button.target = self
         button.action = #selector(pressed(_:))
         button.sendAction(on: [.leftMouseDown, .rightMouseUp])
-        button.setAccessibilityLabel(enabledModules.map { $0 == .stopwatch ? "StopWatch" : $0.title }.joined(separator: "、"))
+        button.setAccessibilityLabel(enabledModules.isEmpty ? "状态栏扩展" : enabledModules.map { $0 == .stopwatch ? "StopWatch" : $0.title }.joined(separator: "、"))
         NSAccessibility.post(element: button, notification: .layoutChanged)
     }
 
@@ -312,7 +326,7 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
             }
         }
         button.setAccessibilityValue(parts.joined(separator: "。"))
-        button.setAccessibilityHelp(isSplit ? "悬停预览，左键打开对应面板。右键点击任意位置打开状态栏扩展菜单。" : face.accessibilityHelp)
+        button.setAccessibilityHelp(enabledModules.isEmpty ? "点击打开状态栏扩展菜单。" : isSplit ? "悬停预览，左键打开对应面板。右键点击任意位置打开状态栏扩展菜单。" : face.accessibilityHelp)
     }
 
     @objc private func pressed(_ sender: NSStatusBarButton) {
@@ -444,7 +458,7 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
     }
 
     func handOffMenuClick(at point: NSPoint, in frame: NSRect, on screen: NSScreen) {
-        guard !removed else { return }
+        guard !removed, !enabledModules.isEmpty else { return }
         primaryClick(at: point, in: frame, on: screen)
     }
 
@@ -456,7 +470,7 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
     }
 
     private func primaryClick(at point: NSPoint, in frame: NSRect, on screen: NSScreen) {
-        let part = target(at: point, in: frame)
+        guard let part = target(at: point, in: frame) else { scheduleMainMenu(at: frame, on: screen); return }
         showPanel(part, at: frame, on: screen)
     }
 
@@ -500,7 +514,7 @@ extension StatusEntry: @preconcurrency NSStatusItemExpandedInterfaceDelegate {
         let openedBySecondaryClick = NSEvent.modifierFlags.contains(.control) ||
             event?.type == .rightMouseDown || event?.type == .rightMouseUp
         let part = target(at: NSEvent.mouseLocation, in: frame)
-        if !openedBySecondaryClick {
+        if !openedBySecondaryClick, let part {
             showPanel(part, at: frame, on: screen)
         } else {
             // Allow AppKit to finish establishing the session before entering
@@ -513,6 +527,8 @@ extension StatusEntry: @preconcurrency NSStatusItemExpandedInterfaceDelegate {
     }
 
     func statusItemDidEndExpandedInterfaceSession(_ statusItem: NSStatusItem, animated: Bool) {
-        if let visiblePanel { onClosePanel?(visiblePanel) }
+        // AppKit can end menu-bar tracking while a click-opened panel is still
+        // in use. The panel shell owns dismissal and reports when to clear the highlight.
+        if !switchingPanels { synchronizeHighlight() }
     }
 }

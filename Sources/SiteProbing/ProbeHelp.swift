@@ -22,11 +22,11 @@ enum HelpField: String, CaseIterable {
     var help: FieldHelp {
         switch self {
         case .global:
-            return FieldHelp("暂停或恢复所有站点的探测，网速读数继续更新。",
-                             "恢复时继续探测之前勾选的站点。关闭期间仍可编辑站点并查看开启后的预计流量。", .history)
+            return FieldHelp("同时开关网速显示、网速采样和所有站点探测。",
+                             "恢复时继续探测之前勾选的站点。站点和探测强度会保留。", .history)
         case .siteEnabled:
             return FieldHelp("勾选后探测这个站点。暂停会保留本站的参数。",
-                             "每个启用的站点至少要开启一种探测类型。在菜单中勾选后立即保存。", .history)
+                             "每个启用的站点至少要开启一种探测类型。点击网络面板中的站点名称即可勾选，修改立即保存。", .history)
         case .name:
             return FieldHelp("给站点起一个容易辨认的名字。留空会使用主机名。",
                              "例如给工作服务取名「办公入口」，悬停时就能找到它。仅改名称会保留近期结果。", .history)
@@ -50,7 +50,7 @@ enum HelpField: String, CaseIterable {
             return FieldHelp("复用会优先使用已有连接。新建每次都建立独立连接。",
                              "复用探测遇到慢告警、状态码不符、连接错误或超时，后续请求会换连接。已经发出的请求仍按各自的截止时间等待。", .cost)
         case .intensity:
-            return FieldHelp("在站点子菜单选择探测强度，选择后立即生效。", "个人强度只属于本站的这一种方式。从模板创建后保存，再到菜单选用。编辑使用中的个人强度，保存后更新运行参数。", .history)
+            return FieldHelp("点击网络面板中的站点名称选择探测强度，选择后立即生效。", "个人强度只属于本站的这一种方式。从模板创建后保存，再到菜单选用。编辑使用中的个人强度，保存后更新运行参数。", .history)
         case .interval:
             return FieldHelp("从这一次实际发出请求起，隔多少秒再尝试发下一条。", "有空位时按间隔发起，满额时等待释放。间隔越短，8 小时发出的请求越多。", .schedule)
         case .warning:

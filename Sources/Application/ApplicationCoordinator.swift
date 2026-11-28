@@ -12,6 +12,7 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
     private var localPointer: Any?
     private var globalPointer: Any?
     private var samplingActive = false
+    private var networkActive = false
     private let probes: ProbeController
     private let login = LoginItemMenu()
     private let systemSleep = SystemSleepMenu()
@@ -39,10 +40,11 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
         probes.load()
         probes.didUpdate = { [weak self] in
             guard let self else { return }
+            self.syncSpeedSampling()
             self.display(self.latestSpeed)
         }
         let entry = statusEntry
-        networkPanel.setTooltip = { [weak entry] in entry?.item.button?.toolTip = entry?.isSplit == true ? nil : $0 }
+        networkPanel.setTooltip = { [weak entry] in entry?.item.button?.toolTip = entry?.enabledModules == [.network] ? $0 : nil }
         networkPanel.readTimeline = { [weak probes] in probes?.monitor.timeline ?? ProbeTimeline() }
         networkPanel.probeNow = { [weak probes] in _ = probes?.monitor.probeNow() }
         probes.monitor.timingDidChange = { [weak self] in self?.networkPanel.refreshTiming() }
@@ -51,25 +53,40 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
         let menu = NSMenu()
         menu.autoenablesItems = false
         menu.delegate = self
-        probes.addItems(to: menu)
+        let switches: [StatusModule: NSMenuItem] = [.network: probes.menuItem, .hearing: hearing.menuItem,
+                                                    .stopwatch: stopwatch.menuItem, .system: systemStatus.menuItem]
+        for module in preferences.order { if let item = switches[module] { menu.addItem(item) } }
         menu.addItem(.separator())
         menu.addItem(systemSleep.item)
         menu.addItem(volumeKeys.item)
         menu.addItem(.separator())
         fileTools.add(to: menu)
         menu.addItem(.separator())
-        menu.addItem(stopwatch.menuItem)
-        menu.addItem(hearing.menuItem)
-        menu.addItem(systemStatus.menuItem)
-        menu.addItem(.separator())
         menu.addItem(login.item)
         let settings = menu.addItem(withTitle: "偏好设置", action: #selector(StatusPreferences.show), keyEquivalent: ",")
         settings.target = preferences
-        preferences.didChange = { [weak entry] in entry?.applyOrder($0) }
+        preferences.didChange = { [weak entry, weak menu] order in
+            entry?.applyOrder(order)
+            guard let menu else { return }
+            for (index, module) in order.enumerated() {
+                guard let item = switches[module], menu.index(of: item) != index else { continue }
+                menu.removeItem(item)
+                menu.insertItem(item, at: index)
+            }
+        }
         entry.onModulesChanged = { [weak preferences, weak entry] in
             preferences?.enabled = Set(entry?.enabledModules ?? [])
         }
         preferences.restore()
+        networkPanel.showAllSites = preferences.showAllSites
+        networkPanel.setShowAllSites = { [weak preferences] in preferences?.setShowAllSites($0) ?? false }
+        networkPanel.configure = { [weak probes] in probes?.configureSites() }
+        networkPanel.openSite = { [weak probes] id, button in
+            probes?.withSiteMenu(id: id) { menu in
+                OperationFeedback.menuScreen = button.window?.screen
+                menu.popUp(positioning: nil, at: NSPoint(x: button.bounds.minX, y: button.isFlipped ? button.bounds.maxY : button.bounds.minY), in: button)
+            }
+        }
         let quit = menu.addItem(withTitle: "退出", action: #selector(quitApp), keyEquivalent: "q")
         quit.target = self
         entry.installMenu(menu)
@@ -83,8 +100,8 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
         center.addObserver(self, selector: #selector(resetHoverPosition),
                            name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
         volumeKeys.restore()
-        sampler.observeNetworkChanges()
         startSampling()
+        display(nil)
     }
 
     private func connectPanels(to entry: StatusEntry) {
@@ -156,7 +173,20 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
         globalPointer = NSEvent.addGlobalMonitorForEvents(matching: events) { [weak self] event in
             MainActor.assumeIsolated { self?.handlePointer(event, global: true) }
         }
-        sampler.start()
+    }
+
+    private func syncSpeedSampling() {
+        let active = samplingActive && probes.monitor.enabled
+        guard active != networkActive else { return }
+        networkActive = active
+        if active {
+            sampler.observeNetworkChanges()
+            sampler.start()
+        } else {
+            latestSpeed = nil
+            sampler.stop()
+            sampler.stopObservingNetworkChanges()
+        }
     }
 
     private func handlePointer(_ event: NSEvent, global: Bool) {
@@ -171,9 +201,8 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
         for token in [localPointer, globalPointer].compactMap({ $0 }) { NSEvent.removeMonitor(token) }
         localPointer = nil
         globalPointer = nil
-        sampler.stop()
-        for shell in panels.values { shell.stop(rememberPins: rememberPins) }
         probes.monitor.stop()
+        for shell in panels.values { shell.stop(rememberPins: rememberPins) }
         display(nil)
     }
 
@@ -200,7 +229,6 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
     }
 
     func menuWillOpen(_ menu: NSMenu) {
-        probes.refreshSiteMenu(menu, rebuilding: true)
         panels.values.forEach { $0.setMenuOpen(true) }
         systemSleep.refresh()
         login.refresh()
@@ -225,7 +253,6 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
         stopwatch.didUpdate = nil
         stopwatch.stopForExit()
         volumeKeys.stop()
-        sampler.stopObservingNetworkChanges()
         stopSampling()
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         guard let stop = hearing.stop() else { return .terminateNow }

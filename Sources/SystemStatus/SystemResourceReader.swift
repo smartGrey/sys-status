@@ -1,4 +1,6 @@
+import CoreML
 import Darwin
+import NetRateNative
 import Foundation
 import IOKit
 import IOKit.ps
@@ -10,10 +12,15 @@ actor SystemResourceReader {
     private var lastDemand: ResourceDemand?
     private var lastRead: [String: TimeInterval] = [:]
     private lazy var coreKinds = Self.readCoreKinds()
+    private var ane: ANEActivityReader?
+    private var gpu: io_service_t = 0
     private let thermal = ThermalReader()
     private var health: Int?
     private let host = mach_host_self()
-    deinit { mach_port_deallocate(mach_task_self_, host) }
+    deinit {
+        if gpu != 0 { IOObjectRelease(gpu) }
+        mach_port_deallocate(mach_task_self_, host)
+    }
 
     func sample(_ demand: ResourceDemand, powerChanged: Bool = false) -> SystemReading {
         let now = ProcessInfo.processInfo.systemUptime
@@ -25,9 +32,12 @@ actor SystemResourceReader {
             return true
         }
 
-        if due("battery", every: demand.batteryPanel || reading.battery?.charging == true ? 3 : .infinity,
-               force: old == nil || powerChanged || old?.batteryPanel != demand.batteryPanel || old?.batteryDetail != demand.batteryDetail) {
+        if demand.needsBattery, due("battery", every: demand.batteryPanel || reading.battery?.charging == true ? 3 : .infinity,
+               force: old?.needsBattery != true || powerChanged || old?.batteryPanel != demand.batteryPanel || old?.batteryDetail != demand.batteryDetail) {
             readBattery(demand)
+        } else if !demand.needsBattery {
+            reading.battery = nil
+            reading.hasBattery = nil
         }
         if demand.batteryDetail, reading.battery != nil, due("health", every: 1800) {
             health = Self.readHealth()
@@ -47,7 +57,34 @@ actor SystemResourceReader {
                 reading.disk = DiskReading(available: disk.f_bavail * size, total: disk.f_blocks * size)
             } else { reading.disk = nil }
         }
-        if !demand.cores { reading.cores = [] }
+        if demand.cores {
+            let starting = old?.cores != true
+            if starting {
+                gpu = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AGXAccelerator"))
+                reading.gpuCores = gpuProperty("gpu-core-count") as? Int
+                reading.neuralCores = MLComputeDevice.allComputeDevices.compactMap {
+                    if case .neuralEngine(let engine) = $0 { return engine.totalCoreCount }
+                    return nil
+                }.first
+                ane = ANEActivityReader.open()
+            }
+            if due("accelerators", every: 0.85, force: starting) {
+                reading.computePhase = (reading.computePhase + 1) % 8
+                let stats = gpuProperty("PerformanceStatistics") as? [String: Any]
+                reading.gpuUsage = (stats?["Device Utilization %"] as? NSNumber).flatMap {
+                    (0...100).contains($0.doubleValue) ? $0.doubleValue : nil
+                }
+                reading.neuralActivity = ane?.samplePercent()?.doubleValue
+            }
+        } else if old?.cores == true {
+            if gpu != 0 { IOObjectRelease(gpu); gpu = 0 }
+            ane = nil
+            reading.gpuCores = nil
+            reading.gpuUsage = nil
+            reading.neuralCores = nil
+            reading.neuralActivity = nil
+            reading.cores = []
+        }
         if !demand.metrics.contains(.memory) { reading.memory = nil }
         if !demand.metrics.contains(.disk) { reading.disk = nil }
         let sensors = demand.metrics.filter(\.isTemperature)
@@ -59,6 +96,11 @@ actor SystemResourceReader {
             })
         }
         return reading
+    }
+
+    private func gpuProperty(_ key: String) -> Any? {
+        guard gpu != 0 else { return nil }
+        return IORegistryEntryCreateCFProperty(gpu, key as CFString, nil, 0)?.takeRetainedValue()
     }
 
     private func readBattery(_ demand: ResourceDemand) {
@@ -142,7 +184,11 @@ actor SystemResourceReader {
         }
         let old = previousCPU
         previousCPU = ticks
-        guard let old, old.count == ticks.count else { reading.cpu = nil; reading.cores = []; return }
+        guard let old, old.count == ticks.count else {
+            reading.cpu = nil
+            reading.cores = showCores ? ticks.indices.map { CoreLoad(id: $0, kind: coreKinds[$0] ?? .unknown, usage: nil) } : []
+            return
+        }
         var total: UInt64 = 0, busy: UInt64 = 0
         var cores: [CoreLoad] = []
         for (index, next) in ticks.enumerated() {
@@ -152,7 +198,7 @@ actor SystemResourceReader {
             busy += working
             if showCores {
                 cores.append(CoreLoad(id: index, kind: coreKinds[index] ?? .unknown,
-                                      usage: all == 0 ? 0 : Double(working) * 100 / Double(all)))
+                                      usage: all == 0 ? nil : Double(working) * 100 / Double(all)))
             }
         }
         reading.cpu = total == 0 ? nil : Double(busy) * 100 / Double(total)

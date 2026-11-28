@@ -302,7 +302,7 @@ final class StopwatchIntegrationTests: XCTestCase {
         XCTAssertNil(entry.item.menu)
         XCTAssertNotNil(button.action)
         XCTAssertEqual(button.accessibilityCustomActions()?.map(\.name), ["打开网络状况", "打开总菜单"])
-        XCTAssertEqual(button.accessibilityLabel(), "网速")
+        XCTAssertEqual(button.accessibilityLabel(), "网络状况")
     }
 
     @MainActor
@@ -348,6 +348,53 @@ final class StopwatchIntegrationTests: XCTestCase {
             XCTAssertEqual(amounts.reduce(0, +), 1, accuracy: 0.000001)
         }
         XCTAssertNil(interrupted.amounts(at: 0.22))
+    }
+
+    @MainActor
+    func testCompactPanelFitsSharedColumnsAndBothShortcuts() throws {
+        _ = NSApplication.shared
+        let content = StopwatchPanelContent()
+        var settings = StopwatchSettings()
+        settings.entries[0].name = "阅读计时器"
+        func update(recording: StopwatchAction? = nil) -> NSSize {
+            let presentation = StopwatchState(settings: settings).presentation(at: 0)
+            return content.update(presentation, availableWidth: 800, recording: recording, issues: [:], hasSaveError: false)
+        }
+
+        for count in 1...3 {
+            if count > 1 { settings.entries.append(StopwatchEntry(name: "五个中文字")) }
+            for elapsed in [0.0, 59, 3600, 359_999] {
+                settings.entries[0].elapsed = elapsed
+                XCTAssertEqual(update().width, 452)
+            }
+        }
+        settings.entries[0].elapsed = 123_456_789
+        XCTAssertGreaterThan(update().width, 452)
+        settings.shortcuts[.switchFocus] = shortcut(kVK_ANSI_Keypad7)
+        settings.shortcuts[.toggle] = shortcut(kVK_ANSI_Keypad6)
+        for recording in [nil, StopwatchAction.toggle] {
+            let size = update(recording: recording)
+            let rows = content.subviews.compactMap { $0 as? StopwatchPanelRow }
+            XCTAssertEqual(rows.count, 3)
+            var previousColumns: [NSRect]?
+            for row in rows {
+                let cells = row.subviews.filter { !$0.isHidden }.sorted { $0.frame.minX < $1.frame.minX }
+                XCTAssertEqual(cells.count, 6)
+                let frames = cells.map(\.frame)
+                if let previousColumns { XCTAssertEqual(frames, previousColumns) }
+                previousColumns = frames
+                for (a, b) in zip(frames, frames.dropFirst()) { XCTAssertLessThan(a.maxX, b.minX) }
+                for field in cells.compactMap({ $0 as? NSTextField }) {
+                    XCTAssertGreaterThanOrEqual(field.frame.width, field.intrinsicContentSize.width)
+                }
+                XCTAssertLessThan(row.frame.maxX, size.width)
+            }
+            let controls = content.subviews.filter { ($0 is NSButton || $0 is NSSegmentedControl) && !$0.isHidden }
+                .map(\.frame).sorted { $0.minX < $1.minX }
+            XCTAssertEqual(controls.count, 5)
+            for (a, b) in zip(controls, controls.dropFirst()) { XCTAssertLessThanOrEqual(a.maxX, b.minX) }
+            XCTAssertLessThan(try XCTUnwrap(controls.last).maxX, size.width)
+        }
     }
 
     @MainActor

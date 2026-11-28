@@ -6,7 +6,11 @@ import IOKit.ps
 final class SystemStatusController: NSObject, ObservableObject {
     @Published private(set) var settings = SystemStatusSettings()
     @Published private(set) var reading = SystemReading()
-    @Published var editing = false
+    @Published var editing = false {
+        didSet {
+            if visible, oldValue != editing { presentation?.resizeToSettings() }
+        }
+    }
     @Published var choosingMetrics = false
     @Published var details = false { didSet { refreshDemand() } }
     private let url: URL
@@ -71,6 +75,16 @@ final class SystemStatusController: NSObject, ObservableObject {
         publishFace()
         return true
     }
+    func restoreLayout() {
+        let width = min(SystemPanelLayout.defaultWidth, presentation?.availableWidth ?? SystemPanelLayout.defaultWidth)
+        if change({
+            $0.modules = ResourceModule.allCases
+            $0.hidden.removeAll()
+            $0.width = width
+            $0.height = SystemPanelLayout.heightToFit(width: width)
+        }) { presentation?.resizeToSettings() }
+    }
+
     private func updateMenu() {
         menuItem.state = settings.enabled ? .on : .off
         menuItem.refreshRow()
@@ -111,7 +125,8 @@ final class SystemStatusController: NSObject, ObservableObject {
             }
             return
         }
-        if source == nil {
+        let next = ResourceDemand(settings, panelVisible: visible, details: details)
+        if next.needsBattery && source == nil {
             source = IOPSNotificationCreateRunLoopSource({ context in
                 guard let context else { return }
                 MainActor.assumeIsolated {
@@ -119,8 +134,10 @@ final class SystemStatusController: NSObject, ObservableObject {
                 }
             }, Unmanaged.passUnretained(self).toOpaque())?.takeRetainedValue()
             if let source { CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes) }
+        } else if !next.needsBattery, let source {
+            CFRunLoopSourceInvalidate(source)
+            self.source = nil
         }
-        let next = ResourceDemand(settings, panelVisible: visible, details: details)
         if demand != next { demand = next; sample(powerChanged: true) }
     }
     private func sample(powerChanged: Bool) {
@@ -151,6 +168,11 @@ final class SystemStatusPanel: NSObject, NSWindowDelegate {
     private unowned let controller: SystemStatusController
     private let window: StatusPanelWindow
     private var anchor = NSRect.zero
+    private weak var anchorScreen: NSScreen?
+    // Only the browsing size is persisted. Editing temporarily adds its footer.
+    private var footerHeight: CGFloat { controller.editing ? SystemPanelLayout.editingFooterHeight : 0 }
+    var availableWidth: CGFloat? { (window.screen ?? anchorScreen).map { $0.visibleFrame.width - 16 } }
+    func resizeToSettings() { if let screen = window.screen ?? anchorScreen { position(in: screen) } }
 
     init(controller: SystemStatusController) {
         self.controller = controller
@@ -158,7 +180,6 @@ final class SystemStatusPanel: NSObject, NSWindowDelegate {
         super.init()
         window.title = "系统状态"
         window.setAccessibilityLabel("系统状态")
-        window.contentMinSize = SystemStatusSettings.minimum
         window.isMovable = false
         window.isOpaque = false
         window.backgroundColor = .clear
@@ -176,6 +197,7 @@ final class SystemStatusPanel: NSObject, NSWindowDelegate {
     }
     func show(under anchor: NSRect, on screen: NSScreen, focus: Bool) -> StatusPanelWindow {
         self.anchor = anchor
+        self.anchorScreen = screen
         position(in: screen)
         controller.setVisible(true)
         if focus { window.makeKeyAndOrderFront(nil) }
@@ -183,17 +205,21 @@ final class SystemStatusPanel: NSObject, NSWindowDelegate {
     }
     func follow(_ anchor: NSRect, on screen: NSScreen) {
         self.anchor = anchor
+        self.anchorScreen = screen
         position(in: screen)
     }
     private func position(in screen: NSScreen) {
-        window.place(size: CGSize(width: controller.settings.width, height: controller.settings.height),
+        var minimum = SystemStatusSettings.minimum
+        minimum.height += footerHeight
+        if window.contentMinSize != minimum { window.contentMinSize = minimum }
+        window.place(size: CGSize(width: controller.settings.width, height: controller.settings.height + footerHeight),
                      under: anchor, on: screen, trailing: true)
     }
     func windowWillStartLiveResize(_ notification: Notification) { window.beginPinning?() }
     func windowDidEndLiveResize(_ notification: Notification) {
         controller.change {
             $0.width = window.frame.width.rounded()
-            $0.height = window.frame.height.rounded()
+            $0.height = (window.frame.height - footerHeight).rounded()
         }
     }
     func close() { controller.setVisible(false); window.orderOut(nil) }

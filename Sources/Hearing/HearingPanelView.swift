@@ -56,7 +56,8 @@ struct HearingPanelView: View {
                 }
             }
         }
-        .padding(20)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
         .background(PanelDragBackground())
         .allowsWindowActivationEvents()
         .frame(width: contentWidth)

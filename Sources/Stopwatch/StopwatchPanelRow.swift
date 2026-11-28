@@ -62,6 +62,7 @@ final class StopwatchPanelRow: StopwatchFlippedView, NSTextFieldDelegate {
     var onReset: ((UUID) -> Void)?
     var onRemove: ((UUID) -> Void)?
 
+    private static let nameFont = NSFont.systemFont(ofSize: 15, weight: .semibold)
     private static let clockFont = NSFont.monospacedDigitSystemFont(ofSize: 26, weight: .medium)
     private static let secondsFont = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
     private let nameLabel = NSTextField(labelWithString: "")
@@ -81,13 +82,12 @@ final class StopwatchPanelRow: StopwatchFlippedView, NSTextFieldDelegate {
     init(id: UUID) {
         self.id = id
         super.init(frame: .zero)
-        let nameFont = NSFont.systemFont(ofSize: 15, weight: .semibold)
-        nameLabel.font = nameFont
+        nameLabel.font = Self.nameFont
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.maximumNumberOfLines = 1
         nameLabel.toolTip = "双击改名"
         nameEditor.placeholderString = "未命名"
-        nameEditor.font = nameFont
+        nameEditor.font = Self.nameFont
         nameEditor.focusRingType = .exterior
         nameEditor.isHidden = true
         nameEditor.usesSingleLineMode = true
@@ -128,12 +128,30 @@ final class StopwatchPanelRow: StopwatchFlippedView, NSTextFieldDelegate {
 
     required init?(coder: NSCoder) { nil }
 
-    static func fullWidth(_ value: String) -> CGFloat {
-        ceil((value as NSString).size(withAttributes: [.font: clockFont]).width)
-    }
+    @MainActor
+    struct Columns: Equatable {
+        static let leading: CGFloat = 13, trailing: CGFloat = 10
+        static let gap: CGFloat = 8, buttonGap: CGFloat = 5
+        static let playWidth: CGFloat = 43, actionWidth: CGFloat = 34
+        let name: CGFloat
+        let clock: CGFloat
+        let seconds: CGFloat
 
-    static func totalWidth(_ value: String) -> CGFloat {
-        ceil((value as NSString).size(withAttributes: [.font: secondsFont]).width)
+        init(_ readings: [StopwatchReading]) {
+            func fieldWidth(_ text: String, font: NSFont) -> CGFloat {
+                ceil((text as NSString).size(withAttributes: [.font: font]).width) + 4
+            }
+            let nameReserve = fieldWidth(String(repeating: "字", count: StopwatchState.nameLimit), font: nameFont)
+            name = readings.reduce(nameReserve) { max($0, fieldWidth($1.name, font: nameFont)) }
+            let longest = StopwatchTime(seconds: readings.map(\.seconds).max() ?? 0)
+            clock = fieldWidth(longest.full, font: clockFont)
+            seconds = max(fieldWidth("999999s", font: secondsFont), fieldWidth(longest.total, font: secondsFont))
+        }
+
+        var minimumWidth: CGFloat {
+            Self.leading + name + clock + seconds + 3 * Self.gap
+                + Self.playWidth + 2 * (Self.actionWidth + Self.buttonGap) + Self.trailing
+        }
     }
 
     func update(_ reading: StopwatchReading, focused: Bool, canDelete: Bool) {
@@ -164,21 +182,16 @@ final class StopwatchPanelRow: StopwatchFlippedView, NSTextFieldDelegate {
         remove.isEnabled = canDelete
     }
 
-    func arrange(fullWidth: CGFloat, totalWidth: CGFloat) {
-        let right = bounds.width - 12
-        remove.frame = NSRect(x: right - 34, y: 16, width: 34, height: 31)
-        reset.frame = NSRect(x: right - 92, y: 16, width: 34, height: 31)
-        playback.frame = NSRect(x: right - 146, y: 15, width: 43, height: 33)
-
-        let secondsEnd = playback.frame.minX - 20
-        let secondsWidth = max(67, totalWidth + 4)
-        total.frame = NSRect(x: secondsEnd - secondsWidth, y: 24, width: secondsWidth, height: 18)
-        let fullEnd = total.frame.minX - 22
-        let timeWidth = max(133, fullWidth + 4)
-        full.frame = NSRect(x: fullEnd - timeWidth, y: 14, width: timeWidth, height: 35)
-        let nameWidth = max(32, full.frame.minX - 25)
-        nameLabel.frame = NSRect(x: 14, y: 21, width: nameWidth, height: 23)
-        nameEditor.frame = NSRect(x: 11, y: 19, width: nameWidth + 6, height: 25)
+    func arrange(_ columns: Columns) {
+        let action = Columns.actionWidth, play = Columns.playWidth
+        remove.frame = NSRect(x: bounds.width - Columns.trailing - action, y: 16, width: action, height: 31)
+        reset.frame = NSRect(x: remove.frame.minX - Columns.buttonGap - action, y: 16, width: action, height: 31)
+        playback.frame = NSRect(x: reset.frame.minX - Columns.buttonGap - play, y: 15, width: play, height: 33)
+        total.frame = NSRect(x: playback.frame.minX - Columns.gap - columns.seconds, y: 24, width: columns.seconds, height: 18)
+        full.frame = NSRect(x: total.frame.minX - Columns.gap - columns.clock, y: 14, width: columns.clock, height: 35)
+        let nameWidth = max(0, full.frame.minX - Columns.gap - Columns.leading)
+        nameLabel.frame = NSRect(x: Columns.leading, y: 21, width: nameWidth, height: 23)
+        nameEditor.frame = NSRect(x: Columns.leading - 3, y: 19, width: nameWidth + 6, height: 25)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -193,9 +206,9 @@ final class StopwatchPanelRow: StopwatchFlippedView, NSTextFieldDelegate {
         surface.setFill()
         outline.fill()
         if focused {
-            NSColor.controlAccentColor.withAlphaComponent(0.76).setStroke()
-            outline.lineWidth = 1
-            outline.stroke()
+            NSColor.labelColor.withAlphaComponent(dark ? 0.77 : 0.60).setFill()
+            let marker = NSRect(x: 4, y: bounds.midY - 14, width: 2.5, height: 28)
+            NSBezierPath(roundedRect: marker, xRadius: 1.25, yRadius: 1.25).fill()
         }
     }
 

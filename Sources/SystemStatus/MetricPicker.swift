@@ -6,31 +6,42 @@ struct MetricPicker: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("状态栏指标").font(.headline)
+            HStack {
+                Text("状态栏指标").font(.headline)
+                Spacer()
+                if model.settings.metrics.count == 1 {
+                    Text("至少保留一个状态栏指标").font(.caption2).foregroundStyle(.secondary)
+                }
+            }
             ReorderBoard(groups: [model.settings.metrics, model.settings.inactiveMetrics], headings: ["已显示", "未显示"],
+                         canMove: model.settings.canMoveIndicator,
                          commit: { groups in
                 model.change { $0.metrics = groups[0]; $0.inactiveMetricOrder = groups[1] }
-            }) { metric in
+            }) { indicator in
                 HStack {
-                    Text(metric.title)
+                    Text(indicator.title)
                     Spacer()
-                    let shade = model.settings.color(for: metric)
-                    Button {
-                        choosing = metric
-                    } label: {
-                        RoundedRectangle(cornerRadius: 4).fill(Color(nsColor: shade.color))
-                            .frame(width: 20, height: 13).padding(5).contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain).reorderControl()
-                    .accessibilityLabel(metric.title + "颜色，" + shade.name)
-                    .popover(isPresented: Binding(get: { choosing == metric }, set: { if !$0 { choosing = nil } })) {
-                        palette(for: metric)
-                    }
+                    if case .metric(let metric) = indicator { colorButton(for: metric) }
                 }
                 .padding(.horizontal, 8).frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(.background, in: RoundedRectangle(cornerRadius: 6))
             }
         }.padding(14).frame(width: 254)
+    }
+
+    private func colorButton(for metric: StatusMetric) -> some View {
+        let shade = model.settings.color(for: metric)
+        return Button {
+            choosing = metric
+        } label: {
+            RoundedRectangle(cornerRadius: 4).fill(Color(nsColor: shade.color))
+                .frame(width: 20, height: 13).padding(5).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).reorderControl()
+        .accessibilityLabel(metric.title + "颜色，" + shade.name)
+        .popover(isPresented: Binding(get: { choosing == metric }, set: { if !$0 { choosing = nil } })) {
+            palette(for: metric)
+        }
     }
 
     private func palette(for metric: StatusMetric) -> some View {

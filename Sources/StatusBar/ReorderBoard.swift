@@ -125,6 +125,7 @@ struct ReorderBoard<Item: Hashable, Row: View>: View {
     var cellHeight: CGFloat = 32
     var gap: CGFloat = 4
     var editable = true
+    var canMove: (Item) -> Bool = { _ in true }
     let commit: ([[Item]]) -> Void
     @ViewBuilder let row: (Item) -> Row
 
@@ -177,7 +178,7 @@ struct ReorderBoard<Item: Hashable, Row: View>: View {
                             .frame(width: slot.width, height: slot.height)
                             .contentShape(Rectangle())
                             .focusable(editable).focused($focused, equals: item)
-                            .modifier(BoardKeyboard(enabled: editable, move: { move(item, by: $0) },
+                            .modifier(BoardKeyboard(enabled: editable && canMove(item), move: { move(item, by: $0) },
                                                     transfer: headings.count == 2 ? { transfer(item) } : nil))
                             .focusEffectDisabled(lifted != nil)
                             .compositingGroup()
@@ -226,6 +227,7 @@ struct ReorderBoard<Item: Hashable, Row: View>: View {
                 if drag == nil {
                     guard !exclusions.contains(where: { $0.contains(value.startLocation) }),
                           let item = groups.joined().first(where: { position($0, in: board)?.contains(value.startLocation) == true }),
+                          canMove(item),
                           let frame = position(item, in: board) else { return }
                     let offset = CGSize(width: value.startLocation.x - frame.minX, height: value.startLocation.y - frame.minY)
                     drag = BoardDrag(item: item, grabOffset: offset, origin: frame.origin, groups: groups)

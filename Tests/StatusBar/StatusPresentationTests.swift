@@ -166,7 +166,7 @@ final class StatusPresentationTests: XCTestCase {
         for (heading, timing) in zip(countdownHeadings, timingViews) {
             XCTAssertEqual(heading.frame.midX, timing.frame.minX + ProbeTimingView.nextContentRect.midX)
         }
-        XCTAssertEqual(fields().first { $0.stringValue == row.name }?.accessibilityLabel(), row.spoken)
+        XCTAssertNotNil(view(card) { (button: NSButton) in button.accessibilityLabel() == row.spoken + "，快捷配置" })
         XCTAssertEqual(size.width, 886)
 
         let many = ConnectivityState(rows: Array(repeating: row, count: 15))
@@ -211,6 +211,36 @@ final class StatusPresentationTests: XCTestCase {
     }
 
     @MainActor
+    func testSiteFilterKeepsQuickConfigurationAnchoredUntilDismissed() throws {
+        let screen = try XCTUnwrap(NSScreen.main)
+        let anchor = NSRect(x: screen.frame.midX, y: screen.visibleFrame.maxY, width: 30, height: 22)
+        let panel = NetworkPanel()
+        var site = ConnectivityState.Row(id: "id", name: "测试服务", enabled: true)
+        panel.update(.init(rows: [site]))
+        let window = try XCTUnwrap(panel.panelContent.show(anchor, screen, false))
+        defer { panel.panelContent.close() }
+        let card = try XCTUnwrap(window.contentView)
+        func siteButton() -> NSButton? { view(card) { (b: NSButton) in b.toolTip == "测试服务 · 快捷配置" } }
+        let button = try XCTUnwrap(siteButton())
+        panel.openSite = { id, anchor in
+            XCTAssertEqual(id, site.id)
+            XCTAssertTrue(anchor === button)
+            site = .init(id: site.id, name: site.name, enabled: false)
+            panel.update(.init(rows: [site]))
+            XCTAssertTrue(window.protectsInteraction())
+            XCTAssertTrue(siteButton() === button)
+        }
+        button.performClick(nil)
+        XCTAssertNil(siteButton())
+        XCTAssertFalse(window.protectsInteraction())
+        let filter = try XCTUnwrap(view(card) { (b: NSButton) in b.title == "显示所有站点" })
+        panel.setShowAllSites = { $0 }
+        filter.performClick(nil)
+        XCTAssertNotNil(siteButton())
+        XCTAssertFalse(site.enabled)
+    }
+
+    @MainActor
     func testPinnedHoverKeepsItsPositionAndAllowsBackgroundDrag() throws {
         let screen = try XCTUnwrap(NSScreen.screens.first)
         let bounds = screen.visibleFrame
@@ -220,7 +250,7 @@ final class StatusPresentationTests: XCTestCase {
         let hover = StatusPanelShell(item: entry.item, content: network.panelContent)
         defer { hover.stop(); entry.removeForExit() }
         hover.resetPosition()
-        let row = ConnectivityState.Row(id: "site", name: "站点", enabled: true)
+        let row = ConnectivityState.Row(id: "site", name: "测试服务", enabled: true)
         network.update(.init(rows: [row]))
         let key = NSApp.keyWindow
         hover.show(under: anchor, within: screen.visibleFrame)
@@ -245,10 +275,14 @@ final class StatusPresentationTests: XCTestCase {
         let dragTarget = try XCTUnwrap(hit(at: center))
         XCTAssertTrue(dragTarget.acceptsFirstMouse(for: nil))
         // Check AppKit's actual target across the full card, including inside the scrolling table.
+        let site = try XCTUnwrap(view(card) { (button: NSButton) in button.accessibilityLabel()?.contains("快捷配置") == true })
+        let config = try XCTUnwrap(view(card) { (button: NSButton) in button.title == "探测配置" })
+        let all = try XCTUnwrap(view(card) { (button: NSButton) in button.title == "显示所有站点" })
+        let controls = [pin, probe, site, config, all]
         for x in stride(from: 3.0, to: card.bounds.width, by: 13) {
             for y in stride(from: 3.0, to: card.bounds.height, by: 13) {
                 let point = NSPoint(x: x, y: y)
-                if [pin, probe].contains(where: { $0.bounds.contains($0.convert(point, from: nil)) }) { continue }
+                if controls.contains(where: { $0.bounds.contains($0.convert(point, from: nil)) }) { continue }
                 XCTAssertTrue(card.canDrag(at: point))
                 XCTAssertTrue(hit(at: point) === dragTarget, "Different drag target at \(point)")
             }
@@ -258,7 +292,9 @@ final class StatusPresentationTests: XCTestCase {
             let point = label.convert(NSPoint(x: label.bounds.midX, y: label.bounds.midY), to: nil)
             XCTAssertTrue(hit(at: point) === dragTarget, title)
         }
-        for button in [pin, probe] {
+        for button in controls {
+            let center = button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)
+            XCTAssertTrue(hit(at: center) === button, button.title)
             XCTAssertFalse(card.canDrag(at: button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)))
         }
 
@@ -332,7 +368,7 @@ final class StatusPresentationTests: XCTestCase {
         XCTAssertNil(card.clock)
         card.setVisible(true)
         let clock = try XCTUnwrap(card.clock)
-        let button = try XCTUnwrap(card.contentView?.subviews.compactMap { $0 as? NSButton }.first)
+        let button = try XCTUnwrap(card.contentView?.subviews.compactMap { $0 as? NSButton }.first { $0.title == "立即探测" })
         var clicks = 0
         card.probeNow = { clicks += 1 }
         XCTAssertTrue(button.acceptsFirstMouse(for: nil))
