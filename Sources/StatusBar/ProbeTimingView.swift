@@ -4,6 +4,7 @@ import CoreText
 // The result, wait track, and next-dispatch clock have identical coordinates in both groups.
 @MainActor
 final class ProbeTimingView: NSView {
+    private static let minimumVisibleWait: TimeInterval = 0.25
     private static let columnGap: CGFloat = 8
     static let resultRect = NSRect(x: 0, y: 0, width: 90, height: 34)
     static let waitRect = NSRect(x: resultRect.maxX + columnGap, y: 0, width: 86, height: resultRect.height)
@@ -49,18 +50,20 @@ final class ProbeTimingView: NSView {
     }
 
     func liveWaitDetail(at now: TimeInterval) -> String? {
-        guard let timeline, !timeline.starts.isEmpty else { return nil }
-        return ([laneName] + timeline.waits(at: now)).joined(separator: "　·　")
+        guard let timeline else { return nil }
+        let waits = timeline.waits(at: now, minimumAge: Self.minimumVisibleWait)
+        return waits.isEmpty ? nil : ([laneName] + waits).joined(separator: "　·　")
     }
 
     override func accessibilityValue() -> Any? {
-        [result.stringValue, timeline?.detail(at: ProcessInfo.processInfo.systemUptime)].compactMap { $0 }.joined(separator: "，")
+        let detail = timeline?.detail(at: ProcessInfo.processInfo.systemUptime, minimumAge: Self.minimumVisibleWait)
+        return [result.stringValue, detail].compactMap { $0 }.joined(separator: "，")
     }
 
     @objc func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint,
                     userData: UnsafeMutableRawPointer?) -> String {
         guard let timeline else { return "" }
-        return laneName + "\n" + timeline.detail(at: ProcessInfo.processInfo.systemUptime)
+        return laneName + "\n" + timeline.detail(at: ProcessInfo.processInfo.systemUptime, minimumAge: Self.minimumVisibleWait)
     }
 
     private func drawText(_ text: String, in rect: NSRect, alignment: NSTextAlignment = .left, compactIfNeeded: Bool = false) {
@@ -118,19 +121,20 @@ final class ProbeTimingView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         guard let timeline else { return }
         let now = ProcessInfo.processInfo.systemUptime
-        if !timeline.starts.isEmpty {
+        let starts = timeline.visibleStarts(at: now, minimumAge: Self.minimumVisibleWait)
+        if !starts.isEmpty {
             let track = NSRect(x: Self.waitRect.minX + 3, y: Self.waitRect.midY - 2.5, width: 55, height: 5)
             let cutoff = Double(timeline.settings.cutoff), warning = Double(timeline.settings.warning)
             fill(track, color: .quaternaryLabelColor)
-            for start in timeline.starts {
+            for start in starts {
                 let age = timeline.elapsed(since: start, at: now)
                 let segment = NSRect(x: track.minX, y: track.minY, width: max(1, track.width * age / cutoff), height: track.height)
                 fill(segment, color: tint(age: age, warning: warning, cutoff: cutoff))
             }
             NSColor.secondaryLabelColor.setFill()
             NSRect(x: track.minX + (track.width - 1) * warning / cutoff, y: track.midY - 5, width: 1, height: 10).fill()
-            if timeline.starts.count > 1 {
-                let count = timeline.starts.count > 9 ? "×9+" : "×\(timeline.starts.count)"
+            if starts.count > 1 {
+                let count = starts.count > 9 ? "×9+" : "×\(starts.count)"
                 let x = track.maxX + 3
                 drawText(count, in: NSRect(x: x, y: 0, width: Self.waitRect.maxX - x, height: Self.waitRect.height))
             }

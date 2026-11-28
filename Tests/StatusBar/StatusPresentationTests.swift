@@ -277,6 +277,27 @@ final class StatusPresentationTests: XCTestCase {
     }
 
     @MainActor
+    func testProbeWaitStaysHiddenForFirst250Milliseconds() throws {
+        let timing = ProbeTimingView()
+        func configure(starts: [TimeInterval]) {
+            timing.configure(ProbeLaneTimeline(result: .success(0.08), next: 30, settings: ProbeLane.fresh.defaults,
+                                               full: false, starts: starts), name: "站点 · 新建", enabled: true)
+        }
+
+        configure(starts: [10, 10.125])
+        XCTAssertNil(timing.liveWaitDetail(at: 10.249))
+        let first = try XCTUnwrap(timing.liveWaitDetail(at: 10.25))
+        XCTAssertTrue(first.contains("请求 1"))
+        XCTAssertFalse(first.contains("请求 2"))
+        XCTAssertTrue(try XCTUnwrap(timing.liveWaitDetail(at: 10.375)).contains("请求 2"))
+        configure(starts: [10.125])
+        XCTAssertFalse(try XCTUnwrap(timing.liveWaitDetail(at: 10.375)).contains("请求 2"))
+        configure(starts: [])
+        XCTAssertNil(timing.liveWaitDetail(at: 10.4))
+        XCTAssertTrue((timing.accessibilityValue() as? String)?.hasPrefix("80 ms") == true)
+    }
+
+    @MainActor
     func testHoverBridgeAndButtonOnFirstClick() throws {
         let anchor = NSRect(x: -180, y: 800, width: 40, height: 24)
         let panel = NSRect(x: -790, y: 580, width: 780, height: 216)
