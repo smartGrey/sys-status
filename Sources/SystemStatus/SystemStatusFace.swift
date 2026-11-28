@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 
 @MainActor
 struct SystemStatusFace: Equatable {
@@ -32,6 +33,7 @@ struct SystemStatusFace: Equatable {
     private let slots: [Slot]
     let width: CGFloat
     private static let batteryFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+    private static let batteryBaselineOffset = NSLayoutManager().defaultBaselineOffset(for: batteryFont)
     private static let labelFont = NSFont.systemFont(ofSize: 10, weight: .medium)
     private static let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
     private static let batteryInset: CGFloat = 5
@@ -130,14 +132,37 @@ struct SystemStatusFace: Equatable {
         }
     }
 
-    private static func ink(on tint: NSColor, dark: Bool) -> NSColor {
-        let base: CGFloat = dark ? 0.18 : 0.90
-        func linear(_ channel: CGFloat) -> CGFloat {
-            let c = base + tint.alphaComponent * (channel - base)
-            return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+    private static func drawBatteryText(_ value: String, atX x: CGFloat, midY: CGFloat,
+                                        ink: NSColor, edge: NSColor, in context: CGContext) {
+        let font = batteryFont
+        let height = (value as NSString).size(withAttributes: [.font: font]).height
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: value, attributes: [
+            .font: font, NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String): true
+        ]))
+        let baseline = CGPoint(x: x, y: midY + height / 2 - batteryBaselineOffset)
+        context.saveGState()
+        defer { context.restoreGState() }
+        context.textMatrix = .identity
+        // Paint the rounded outline first so the solid fill retains the original weight.
+        context.setLineJoin(.round)
+        context.setLineWidth(1.9)
+        context.setStrokeColor(edge.cgColor)
+        context.textPosition = baseline
+        context.setTextDrawingMode(.stroke)
+        CTLineDraw(line, context)
+        context.setFillColor(ink.cgColor)
+        context.textPosition = baseline
+        context.setTextDrawingMode(.fill)
+        CTLineDraw(line, context)
+    }
+
+    private static func drawPlug(in rect: NSRect, ink: NSColor, edge: NSColor) {
+        guard let plug = NSImage(systemSymbolName: "powerplug.fill", accessibilityDescription: nil) else { return }
+        let outline = plug.withSymbolConfiguration(.init(paletteColors: [edge]))
+        for (dx, dy) in [(-0.85, 0.0), (0.85, 0.0), (0.0, -0.85), (0.0, 0.85)] {
+            outline?.draw(in: rect.offsetBy(dx: dx, dy: dy))
         }
-        let luminance = 0.2126 * linear(tint.redComponent) + 0.7152 * linear(tint.greenComponent) + 0.0722 * linear(tint.blueComponent)
-        return luminance > 0.179 ? .black : .white
+        plug.withSymbolConfiguration(.init(paletteColors: [ink]))?.draw(in: rect)
     }
 
     func image() -> NSImage {
@@ -168,30 +193,34 @@ struct SystemStatusFace: Equatable {
                     let dark = NSAppearance.currentDrawing().bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
                     Self.batteryOutline(badge.powerMode, dark: dark).setStroke()
                     outline.stroke()
-                    @MainActor func drawContents(_ ink: NSColor) {
-                        let start = slot.x + Self.batteryInset
-                        text(badge.number, font: Self.batteryFont, color: ink, x: start)
-                        let end = start + Self.measure(badge.number, Self.batteryFont)
-                        if let watts = badge.powerText {
-                            ink.setFill()
-                            NSBezierPath(ovalIn: NSRect(x: end + 2, y: 9, width: 2, height: 2)).fill()
-                            text(watts, font: Self.batteryFont, color: ink, x: end + Self.dotSpace)
-                        } else if badge.plugged {
-                            symbol("powerplug.fill", in: NSRect(x: end + 2, y: 4.5, width: 9, height: 11), ink: ink)
-                        }
-                    }
-                    drawContents(.labelColor)
                     if let percent = badge.percent {
                         let track = box.insetBy(dx: 1.3, dy: 1.3)
                         let filled = NSRect(x: track.minX, y: track.minY, width: track.width * CGFloat(percent)/100, height: track.height)
                         NSGraphicsContext.saveGraphicsState()
                         NSBezierPath(roundedRect: track, xRadius: 2.8, yRadius: 2.8).addClip()
                         NSBezierPath(rect: filled).addClip()
-                        let tint = Self.batteryTint(percent, dark: dark)
-                        tint.setFill()
+                        Self.batteryTint(percent, dark: dark).setFill()
                         track.fill()
-                        drawContents(Self.ink(on: tint, dark: dark))
                         NSGraphicsContext.restoreGraphicsState()
+                    }
+                    let ink: NSColor = dark ? .white : .black
+                    let edge = (dark ? NSColor.black : .white).withAlphaComponent(0.92)
+                    guard let context = NSGraphicsContext.current?.cgContext else { continue }
+                    let start = slot.x + Self.batteryInset
+                    Self.drawBatteryText(badge.number, atX: start, midY: bounds.midY,
+                                         ink: ink, edge: edge, in: context)
+                    let end = start + Self.measure(badge.number, Self.batteryFont)
+                    if let watts = badge.powerText {
+                        let dot = NSRect(x: end + 2, y: 9, width: 2, height: 2)
+                        edge.setFill()
+                        NSBezierPath(ovalIn: dot.insetBy(dx: -0.9, dy: -0.9)).fill()
+                        ink.setFill()
+                        NSBezierPath(ovalIn: dot).fill()
+                        Self.drawBatteryText(watts, atX: end + Self.dotSpace, midY: bounds.midY,
+                                             ink: ink, edge: edge, in: context)
+                    } else if badge.plugged {
+                        Self.drawPlug(in: NSRect(x: end + 2, y: 4.5, width: 9, height: 11),
+                                      ink: ink, edge: edge)
                     }
                 }
             }
