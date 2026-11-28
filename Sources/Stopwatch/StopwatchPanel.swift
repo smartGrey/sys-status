@@ -1,20 +1,15 @@
 import AppKit
 import Carbon
 
-private class StopwatchPanelWindow: NSPanel {
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
-}
-
 @MainActor
 final class StopwatchPanel {
     private weak var controller: StopwatchController?
-    private var window: NSPanel?
+    private var window: StatusPanelWindow?
     private var content: StopwatchPanelContent?
     private var anchor: NSRect = .zero
     private var screen: NSScreen?
     private var localMonitor: Any?
-    private var globalMonitor: Any?
+    var isRecording: Bool { recording != nil }
     private var presentation: StopwatchPresentation?
     private var shortcutIssues: [StopwatchAction: String] = [:]
     private var hasSaveError = false
@@ -27,27 +22,25 @@ final class StopwatchPanel {
 
     init(controller: StopwatchController) { self.controller = controller }
 
-    func show(under anchor: NSRect, on screen: NSScreen) {
+    @discardableResult
+    func show(under anchor: NSRect, on screen: NSScreen, focus: Bool = true) -> StatusPanelWindow {
         self.anchor = anchor
         self.screen = screen
         let window = window ?? makeWindow()
         refresh()
-        window.makeKeyAndOrderFront(nil)
+        if focus { window.makeKeyAndOrderFront(nil) }
         installMonitors()
-        controller?.panelVisibilityChanged?(true)
+        return window
     }
 
     func dismissIfVisible() {
         guard isVisible else { return }
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }
-        if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
         localMonitor = nil
-        globalMonitor = nil
         endRecording()
         content?.finishEditing(commit: false)
         window?.orderOut(nil)
         content?.clearInputIssues()
-        controller?.panelVisibilityChanged?(false)
     }
 
     func update(_ presentation: StopwatchPresentation, shortcutIssues: [StopwatchAction: String], hasSaveError: Bool) {
@@ -57,9 +50,9 @@ final class StopwatchPanel {
         if isVisible { refresh() }
     }
 
-    func trackAnchor(_ resolve: (NSScreen) -> NSRect?) {
-        guard isVisible, let screen, let frame = resolve(screen) else { return }
-        anchor = frame
+    func follow(_ anchor: NSRect, on screen: NSScreen) {
+        self.anchor = anchor
+        self.screen = screen
         refresh()
     }
 
@@ -68,12 +61,11 @@ final class StopwatchPanel {
         let bounds = screen.visibleFrame
         let size = content.update(presentation, availableWidth: bounds.width - 16, recording: recording,
                                   issues: shortcutIssues, hasSaveError: hasSaveError)
-        let frame = StatusPanelGeometry.frame(size: size, under: anchor, within: bounds.insetBy(dx: 8, dy: 0))
-        if frame != window.frame { window.setFrame(frame, display: true) }
+        window.place(size: CGSize(width: size.width, height: size.height + PanelChrome.headerHeight), under: anchor, on: screen)
     }
 
-    private func makeWindow() -> NSPanel {
-        let window = StopwatchPanelWindow(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
+    private func makeWindow() -> StatusPanelWindow {
+        let window = StatusPanelWindow(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
                                           backing: .buffered, defer: false)
         window.level = .statusBar
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
@@ -83,6 +75,7 @@ final class StopwatchPanel {
         window.hidesOnDeactivate = false
         window.animationBehavior = .none
         window.isReleasedWhenClosed = false
+        window.isMovable = false
         window.title = "StopWatch"
         window.setAccessibilityLabel("StopWatch")
 
@@ -132,37 +125,21 @@ final class StopwatchPanel {
             self?.finishRecording(action, shortcut: nil)
         }
         material.addSubview(content)
-        window.contentView = material
+        _ = PanelChrome(title: "秒表", body: material, window: window)
+        window.dismissPanel = { [weak self] in self?.dismissIfVisible() }
         self.content = content
         self.window = window
         return window
     }
 
     private func installMonitors() {
-        let mouse: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [mouse, .keyDown, .flagsChanged]) { [weak self] event in
-            guard let self else { return event }
-            switch event.type {
-            case .keyDown: return self.handleKey(event) ? nil : event
-            case .flagsChanged: self.captureModifiers(event)
-            default: self.dismissForClick(event)
-            }
+        guard localMonitor == nil else { return }
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
+            guard let self, self.window?.isKeyWindow == true else { return event }
+            if event.type == .keyDown { return self.handleKey(event) ? nil : event }
+            self.captureModifiers(event)
             return event
         }
-        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: mouse) { [weak self] event in
-            MainActor.assumeIsolated {
-                guard let self, self.controller?.handlePanelStatusClick?(event) != true else { return }
-                self.dismissForClick(event)
-            }
-        }
-    }
-
-    private func dismissForClick(_ event: NSEvent) {
-        let point = NSEvent.mouseLocation
-        guard event.window !== window, window?.frame.contains(point) != true else { return }
-        // WindowServer can deliver a menu bar click through the global monitor.
-        if controller?.isStatusEntry(at: point) == true { return }
-        dismissIfVisible()
     }
 
     private func handleKey(_ event: NSEvent) -> Bool {
@@ -185,7 +162,7 @@ final class StopwatchPanel {
         guard shortcut.modifiers == 0, content?.editorHasMarkedText != true else { return false }
         switch code {
         case kVK_Escape:
-            if content?.finishEditing(commit: false) != true { dismissIfVisible() }
+            if content?.finishEditing(commit: false) != true { window?.dismissPanel?() }
             return true
         case kVK_Return, kVK_ANSI_KeypadEnter:
             return content?.finishEditing(commit: true) == true

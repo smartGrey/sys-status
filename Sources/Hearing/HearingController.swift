@@ -10,9 +10,6 @@ final class HearingController: NSObject {
     private var panel: HearingPanelController?
     var savedShortcut: ShortcutBinding? { store.settings.shortcut }
     var didUpdate: ((HearingPresentation?) -> Void)?
-    var visibilityChanged: ((Bool) -> Void)?
-    var containsButton: ((NSPoint) -> Bool)?
-    var handleStatusClick: ((NSEvent) -> Bool)?
     var shortcutConflict: (ShortcutBinding) -> String? = { _ in nil }
     var interceptShortcut: ((ShortcutBinding) -> Bool)?
 
@@ -89,20 +86,19 @@ final class HearingController: NSObject {
         feedback?.show("监听环境音入口已开启")
     }
 
-    func togglePanel(under anchor: NSRect, on screen: NSScreen) {
-        guard let model else { return }
-        if panel?.isVisible == true { closePanel(); return }
-        let panel = self.panel ?? HearingPanelController(model: model)
-        self.panel = panel
-        panel.onVisibilityChange = visibilityChanged
-        panel.containsButton = containsButton
-        panel.handleStatusClick = handleStatusClick
-        model.refresh()
-        panel.show(under: anchor, on: screen)
+    var panelContent: PanelContent {
+        PanelContent(show: { [weak self] anchor, screen, focus in
+            guard let self, let model else { return nil }
+            let panel = self.panel ?? HearingPanelController(model: model)
+            self.panel = panel
+            model.refresh()
+            return panel.show(under: anchor, on: screen, focus: focus)
+        }, close: { [weak self] in self?.closePanel() },
+        follow: { [weak self] anchor, screen in self?.panel?.follow(anchor, on: screen) },
+        isEditing: { [weak self] in self?.model?.shortcuts.isRecording == true })
     }
 
     func closePanel() { panel?.close() }
-    func trackPanelAnchor(_ resolve: (NSScreen) -> NSRect?) { panel?.trackAnchor(resolve) }
 
     @discardableResult
     func stop() -> Task<Void, Never>? {

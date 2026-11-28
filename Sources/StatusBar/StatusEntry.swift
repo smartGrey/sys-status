@@ -3,8 +3,10 @@ import AppKit
 /// The WindowServer replicates this one system button on each menu bar.
 @MainActor
 final class StatusEntry: NSObject, NSViewToolTipOwner {
-    enum Region { case hearing, network, stopwatch }
+    enum Region: CaseIterable { case hearing, network, stopwatch, system }
     private var hearing: HearingPresentation?
+    private var systemFace: SystemStatusFace?
+    private var systemImage: NSImage?
     private var hearingImage: NSImage?
     private var appearanceObservation: NSKeyValueObservation?
     private var contrastObservation: NSObjectProtocol?
@@ -39,10 +41,24 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
         item.button?.setAccessibilityLabel("网速")
     }
 
-    var isSplit: Bool { watch != nil || hearing != nil }
+    var isSplit: Bool { watch != nil || hearing != nil || systemFace != nil }
     private static let hearingGap = StatusFace.moduleGap + 1
     private var hearingWidth: CGFloat { hearing == nil ? 0 : StatusIconState.size.width + Self.hearingGap }
-    private var totalWidth: CGFloat { hearingWidth + face.width + (watch.map { StatusFace.moduleGap + $0.width } ?? 0) }
+    private var baseWidth: CGFloat { hearingWidth + face.width + (watch.map { StatusFace.moduleGap + $0.width } ?? 0) }
+    private var totalWidth: CGFloat { baseWidth + (systemFace.map { StatusFace.moduleGap + $0.width } ?? 0) }
+
+    func updateSystem(_ next: SystemStatusFace?) {
+        guard !removed, systemFace != next else { return }
+        let oldWidth = totalWidth
+        let wasEnabled = systemFace != nil
+        systemFace = next
+        systemImage = next?.image()
+        if oldWidth != totalWidth { item.length = totalWidth }
+        if wasEnabled != (next != nil) { configureInput() }
+        draw()
+        updateAccessibility()
+        if oldWidth != totalWidth { layoutChanged() }
+    }
     var isOpeningMenu: Bool { pendingMenuOpen != nil || trackingMenu }
 
     func installMenu(_ menu: NSMenu) {
@@ -147,7 +163,7 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
     func networkRegion(of frame: NSRect) -> NSRect {
         let padding = max(0, (frame.width - totalWidth) / 2)
         let left = hearing == nil ? frame.minX : frame.minX + padding + hearingWidth - Self.hearingGap / 2
-        let right = watch == nil ? frame.maxX : frame.minX + padding + hearingWidth + face.width + StatusFace.moduleGap / 2
+        let right = watch == nil && systemFace == nil ? frame.maxX : frame.minX + padding + hearingWidth + face.width + StatusFace.moduleGap / 2
         return NSRect(x: left, y: frame.minY, width: right - left, height: frame.height)
     }
 
@@ -160,11 +176,17 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
             return frame.divided(atDistance: network.minX - frame.minX, from: .minXEdge).slice
         case .stopwatch:
             guard watch != nil else { return nil }
-            return frame.divided(atDistance: network.maxX - frame.minX, from: .minXEdge).remainder
+            let right = region(.system, of: frame)?.minX ?? frame.maxX
+            return NSRect(x: network.maxX, y: frame.minY, width: right-network.maxX, height: frame.height)
+        case .system:
+            guard systemFace != nil else { return nil }
+            let x = frame.minX + max(0, (frame.width-totalWidth)/2) + baseWidth + StatusFace.moduleGap/2
+            return NSRect(x: x, y: frame.minY, width: frame.maxX-x, height: frame.height)
         }
     }
 
     private func target(at point: NSPoint, in frame: NSRect) -> Region {
+        if region(.system, of: frame)?.contains(point) == true { return .system }
         if region(.hearing, of: frame)?.contains(point) == true { return .hearing }
         if region(.stopwatch, of: frame)?.contains(point) == true { return .stopwatch }
         return .network
@@ -187,11 +209,12 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
         if focusTransition != nil, amounts == nil { finishFocusTransition() }
         guard let image = face.renderedImage else { return }
         let networkAndWatch = watch?.combinedImage(with: image, focusAmounts: amounts) ?? image
-        guard let hearingImage else { item.button?.image = networkAndWatch; return }
+        guard hearingImage != nil || systemImage != nil else { item.button?.image = networkAndWatch; return }
+        let hearingImage = self.hearingImage, systemImage = self.systemImage, end = baseWidth
         let offset = hearingWidth
         item.button?.image = NSImage(size: NSSize(width: totalWidth, height: image.size.height), flipped: false) { bounds in
-            hearingImage.draw(at: NSPoint(x: 0, y: bounds.midY - hearingImage.size.height / 2),
-                              from: .zero, operation: .sourceOver, fraction: 1)
+            if let hearingImage { hearingImage.draw(at: NSPoint(x: 0, y: bounds.midY - hearingImage.size.height / 2), from: .zero, operation: .sourceOver, fraction: 1) }
+            systemImage?.draw(at: NSPoint(x: end + StatusFace.moduleGap, y: 0), from: .zero, operation: .sourceOver, fraction: 1)
             networkAndWatch.draw(at: NSPoint(x: offset, y: 0), from: .zero, operation: .sourceOver, fraction: 1)
             return true
         }
@@ -233,7 +256,7 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
     private func configureInput() {
         guard let button = item.button else { return }
         if #available(macOS 27.0, *) { item.expandedInterfaceDelegate = self }
-        let panels: [(Region, String)] = [(.hearing, "打开环境音面板"), (.stopwatch, "打开秒表面板")]
+        let panels: [(Region, String)] = [(.network, "打开网络状况"), (.hearing, "打开环境音面板"), (.stopwatch, "打开秒表面板"), (.system, "打开系统状态")]
         button.setAccessibilityCustomActions(panels.compactMap { part, name in
             guard region(part, of: button.bounds) != nil else { return nil }
             return NSAccessibilityCustomAction(name: name) { [weak self] in
@@ -246,26 +269,29 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
                 }
                 return true
             }
-        })
+        } + [NSAccessibilityCustomAction(name: "打开总菜单") { [weak self] in
+            self?.openMainMenu()
+            return true
+        }])
         button.target = self
         button.action = #selector(pressed(_:))
         button.sendAction(on: [.leftMouseDown, .rightMouseUp])
-        button.setAccessibilityLabel([hearing == nil ? nil : "监听环境音", "网速", watch == nil ? nil : "StopWatch"].compactMap { $0 }.joined(separator: "、"))
+        button.setAccessibilityLabel([hearing == nil ? nil : "监听环境音", "网速", watch == nil ? nil : "StopWatch", systemFace == nil ? nil : "系统状态"].compactMap { $0 }.joined(separator: "、"))
         NSAccessibility.post(element: button, notification: .layoutChanged)
     }
 
     private func updateAccessibility() {
         guard let button = item.button else { return }
         let parts = [hearing.map { "监听环境音，" + $0.title }, face.accessibilityValue,
-                     watch.map { "StopWatch，" + $0.accessibilityValue }]
+                     watch.map { "StopWatch，" + $0.accessibilityValue }, systemFace?.spoken]
         button.setAccessibilityValue(parts.compactMap { $0 }.joined(separator: "。"))
-        button.setAccessibilityHelp(isSplit ? "左键点击对应区域打开菜单或面板。右键点击任意位置打开状态栏扩展菜单。" : face.accessibilityHelp)
+        button.setAccessibilityHelp(isSplit ? "悬停预览，左键打开对应面板。右键点击任意位置打开状态栏扩展菜单。" : face.accessibilityHelp)
     }
 
     @objc private func pressed(_ sender: NSStatusBarButton) {
         guard let event = NSApp.currentEvent,
               event.type == .leftMouseDown || event.type == .rightMouseUp else {
-            openNetworkMenu()
+            openMainMenu()
             return
         }
         // AppKit can deliver a secondary action with an event centered on the
@@ -277,25 +303,25 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
             // System items can shift on a crowded display. Use the actual click
             // as the anchor if the projected button does not cover it.
             let frame = StatusPanelGeometry.menuAnchor(at: point, replica: replica, visibleFrame: screen.visibleFrame)
-            scheduleNetworkMenu(at: frame, on: screen, openedBySecondaryClick: true)
+            scheduleMainMenu(at: frame, on: screen)
         } else if let (frame, screen) = location(at: point) {
             primaryClick(at: point, in: frame, on: screen)
         }
     }
 
-    private func openNetworkMenu() {
+    private func openMainMenu() {
         guard let (frame, screen) = location(at: nil) else { return }
-        showNetworkMenu(at: frame, on: screen)
+        showMainMenu(at: frame, on: screen)
     }
 
-    private func scheduleNetworkMenu(at frame: NSRect, on screen: NSScreen, openedBySecondaryClick: Bool) {
+    private func scheduleMainMenu(at frame: NSRect, on screen: NSScreen) {
         let token = UUID()
         pendingMenuOpen = token
         // Let AppKit finish closing its previous menu session before reopening.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let self, pendingMenuOpen == token else { return }
             pendingMenuOpen = nil
-            showNetworkMenu(at: frame, on: screen, openedBySecondaryClick: openedBySecondaryClick)
+            showMainMenu(at: frame, on: screen)
         }
     }
 
@@ -330,7 +356,7 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
         }
     }
 
-    private func showNetworkMenu(at frame: NSRect, on screen: NSScreen, openedBySecondaryClick: Bool = false) {
+    private func showMainMenu(at frame: NSRect, on screen: NSScreen) {
         guard let menu, !removed, !trackingMenu, NSScreen.screens.contains(screen) else { return }
         pendingMenuOpen = nil
         trackingMenu = true
@@ -341,9 +367,9 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
         let start = ProcessInfo.processInfo.systemUptime
         // WindowServer can consume a click on the status item and return from
         // native tracking without an NSApp.currentEvent.
-        let clickMonitor = (isSplit || openedBySecondaryClick) ? NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+        let clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
             MainActor.assumeIsolated { self?.menuDismissalClick = event }
-        } : nil
+        }
         // Keep the menu reachable from the status item for VoiceOver during tracking.
         item.menu = menu
         let selected: Bool
@@ -381,19 +407,14 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
         } else if !selected, let point = dismissalPoint,
                   let (buttonFrame, destination) = location(at: point),
                   containsButton(at: point) || (trackedAnotherScreen && destination == screen && frame.contains(point)) {
-            handOffMenuClick(at: point, in: buttonFrame, on: destination, openedBySecondaryClick: openedBySecondaryClick)
+            handOffMenuClick(at: point, in: buttonFrame, on: destination)
         }
         synchronizeHighlight()
     }
 
-    func handOffMenuClick(at point: NSPoint, in frame: NSRect, on screen: NSScreen, openedBySecondaryClick: Bool) {
+    func handOffMenuClick(at point: NSPoint, in frame: NSRect, on screen: NSScreen) {
         guard !removed else { return }
-        let part = target(at: point, in: frame)
-        if part != .network {
-            showPanel(part, at: frame, on: screen)
-        } else if openedBySecondaryClick {
-            scheduleNetworkMenu(at: frame, on: screen, openedBySecondaryClick: false)
-        }
+        primaryClick(at: point, in: frame, on: screen)
     }
 
     private static func primaryClickPoint(of event: NSEvent) -> NSPoint? {
@@ -405,8 +426,7 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
 
     private func primaryClick(at point: NSPoint, in frame: NSRect, on screen: NSScreen) {
         let part = target(at: point, in: frame)
-        if part == .network { showNetworkMenu(at: frame, on: screen) }
-        else { showPanel(part, at: frame, on: screen) }
+        showPanel(part, at: frame, on: screen)
     }
 
     private func showPanel(_ part: Region, at frame: NSRect, on screen: NSScreen) {
@@ -431,7 +451,7 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
         let screens = NSScreen.screens
         let destination = preferred ?? point.flatMap { point in screens.first(where: { $0.frame.contains(point) }) }
         guard let destination, source != destination else { return (frame, source) }
-        guard let projected = StatusHover.replicaFrame(of: frame, from: source.frame, to: destination.frame,
+        guard let projected = StatusPanelShell.replicaFrame(of: frame, from: source.frame, to: destination.frame,
                                                        topRightArea: destination.auxiliaryTopRightArea)
         else { return nil }
         return (projected, destination)
@@ -445,16 +465,18 @@ extension StatusEntry: @preconcurrency NSStatusItemExpandedInterfaceDelegate {
         // expanded session. Route the initiating click even when a panel is visible.
         guard !trackingMenu,
               let (frame, screen) = location(at: NSEvent.mouseLocation) else { return }
-        let openedBySecondaryClick = NSEvent.modifierFlags.contains(.control)
+        let event = NSApp.currentEvent
+        let openedBySecondaryClick = NSEvent.modifierFlags.contains(.control) ||
+            event?.type == .rightMouseDown || event?.type == .rightMouseUp
         let part = target(at: NSEvent.mouseLocation, in: frame)
-        if !openedBySecondaryClick, part != .network {
+        if !openedBySecondaryClick {
             showPanel(part, at: frame, on: screen)
         } else {
             // Allow AppKit to finish establishing the session before entering
             // the native menu's synchronous tracking loop.
             DispatchQueue.main.async { [weak self] in
                 guard let self, item.expandedInterfaceSession === session else { return }
-                showNetworkMenu(at: frame, on: screen, openedBySecondaryClick: openedBySecondaryClick)
+                showMainMenu(at: frame, on: screen)
             }
         }
     }

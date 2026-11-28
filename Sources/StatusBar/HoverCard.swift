@@ -137,37 +137,10 @@ private enum BackgroundCursor {
 }
 
 @MainActor
-private final class HoverDragSurface: NSView {
+private final class HoverDragSurface: PanelDragView {
     weak var card: HoverCard?
     private var pointerTracking: NSTrackingArea?
-    private var dragStart: (pointer: NSPoint, origin: NSPoint)?
     private var backgroundCursorEnabled = false
-
-    // The panel stays nonactivating, so the drag target must accept the first click.
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
-    override func mouseDown(with event: NSEvent) {
-        guard let window else { return }
-        dragStart = (screenPoint(for: event, in: window), window.frame.origin)
-    }
-
-    override func mouseUp(with event: NSEvent) { dragStart = nil }
-
-    override func mouseDragged(with event: NSEvent) {
-        guard let dragStart, let window else { return }
-        if !window.isMovable { card?.beginDrag?() }
-        let pointer = screenPoint(for: event, in: window)
-        let origin = NSPoint(x: dragStart.origin.x + pointer.x - dragStart.pointer.x,
-                             y: dragStart.origin.y + pointer.y - dragStart.pointer.y)
-        window.setFrameOrigin(origin)
-    }
-
-    private func screenPoint(for event: NSEvent, in window: NSWindow) -> NSPoint {
-        guard let point = event.cgEvent?.location, let primary = NSScreen.screens.first else {
-            return window.convertPoint(toScreen: event.locationInWindow)
-        }
-        return NSPoint(x: point.x, y: primary.frame.maxY - point.y)
-    }
 
     override func scrollWheel(with event: NSEvent) { card?.scrollTable(with: event) }
 
@@ -231,7 +204,6 @@ final class HoverCard: NSBox {
     private(set) var clock: Timer?
     var probeNow: (() -> Void)?
     var togglePin: (() -> Void)?
-    var beginDrag: (() -> Void)?
 
     init() {
         super.init(frame: .zero)

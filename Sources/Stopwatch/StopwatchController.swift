@@ -20,13 +20,16 @@ final class StopwatchController {
     private(set) var presentation: StopwatchPresentation
     var didUpdate: ((StopwatchPresentation?) -> Void)?
     var enabled: Bool { state.settings.enabled }
-    var panelVisibilityChanged: ((Bool) -> Void)?
-    var handlePanelStatusClick: ((NSEvent) -> Bool)?
     var hearingUsesShortcut: ((ShortcutBinding) -> Bool)?
     var interceptShortcut: ((ShortcutBinding) -> Bool)?
-    var statusEntryContains: ((NSPoint) -> Bool)?
-
-    func isStatusEntry(at point: NSPoint) -> Bool { statusEntryContains?(point) == true }
+    var panelContent: PanelContent {
+        PanelContent(show: { [weak self] anchor, screen, focus in
+            guard let self, enabled else { return nil }
+            return panel.show(under: anchor, on: screen, focus: focus)
+        }, close: { [weak self] in self?.closePanel() },
+        follow: { [weak self] anchor, screen in self?.panel.follow(anchor, on: screen) },
+        isEditing: { [weak self] in self?.panel.isRecording == true })
+    }
 
     lazy var menuItem: StatusMenuToggleItem = {
         let item = StatusMenuToggleItem.make(title: "StopWatch", action: #selector(StopwatchMenuTarget.toggle(_:)))
@@ -84,11 +87,8 @@ final class StopwatchController {
 
     func closePanel() { panel.dismissIfVisible() }
 
-    func trackPanelAnchor(_ resolve: (NSScreen) -> NSRect?) { panel.trackAnchor(resolve) }
-
     // Screen sleep and session lock do not call this method.
     func pauseForSystemSleep() {
-        closePanel()
         hotKeys.clearHeldKeys()
         settle()
     }

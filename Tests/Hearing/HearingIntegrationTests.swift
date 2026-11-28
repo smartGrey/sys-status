@@ -91,7 +91,7 @@ final class HearingIntegrationTests: XCTestCase {
         XCTAssertEqual(audio.maxX, network.minX)
         XCTAssertEqual(network.maxX, watch.minX)
         XCTAssertEqual(watch.maxX, frame.maxX)
-        XCTAssertEqual(entry.item.button?.accessibilityCustomActions()?.count, 2)
+        XCTAssertEqual(entry.item.button?.accessibilityCustomActions()?.count, 4)
         entry.updateStopwatch(nil)
         XCTAssertTrue(entry.isSplit)
         entry.updateHearing(nil)
@@ -117,7 +117,7 @@ extension HearingIntegrationTests {
         let panel = try XCTUnwrap(app.windows.first { $0.isVisible && $0.title == "监听环境音" })
         XCTAssertEqual(panel.frame.maxY, StatusPanelGeometry.top(under: anchor, within: visible), accuracy: 1)
         let moved = anchor.offsetBy(dx: 40, dy: 0)
-        controller.trackAnchor { _ in moved }
+        controller.follow(moved, on: screen)
         XCTAssertEqual(panel.frame.maxX, moved.maxX, accuracy: 1)
         shortcuts.beginRecording()
         controller.close()

@@ -206,6 +206,7 @@ final class StopwatchPanelRow: StopwatchFlippedView, NSTextFieldDelegate {
     }
 
     override func mouseDown(with event: NSEvent) {
+        super.mouseDown(with: event)
         onSelect?(id)
         let location = convert(event.locationInWindow, from: nil)
         if event.clickCount == 2, nameLabel.frame.contains(location) { beginEditing() }

@@ -4,8 +4,13 @@ import AppKit
 final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private(set) lazy var statusEntry = StatusEntry()
     let stopwatch: StopwatchController
+    let systemStatus: SystemStatusController
     private let hearing: HearingController
-    private var hover: StatusHover!
+    private let networkPanel = NetworkPanel()
+    private var panels: [StatusEntry.Region: StatusPanelShell] = [:]
+    private var localPointer: Any?
+    private var globalPointer: Any?
+    private var samplingActive = false
     private let probes: ProbeController
     private let login = LoginItemMenu()
     private let systemSleep = SystemSleepMenu()
@@ -19,6 +24,7 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
                                              networkChanged: { [weak self] in self?.probes.monitor.networkDidChange() })
 
     init(dataDirectory: URL = AppDataFile.directory, defaults: UserDefaults = .standard) {
+        systemStatus = SystemStatusController(url: AppDataFile.systemStatus.url(in: dataDirectory))
         probes = ProbeController(store: ProbeConfigurationStore(url: AppDataFile.probes.url(in: dataDirectory), defaults: defaults))
         volumeKeys = VolumeKeyMenu(store: VolumeKeyStore(url: AppDataFile.volumeKeys.url(in: dataDirectory), defaults: defaults))
         stopwatch = StopwatchController(store: StopwatchStore(url: AppDataFile.stopwatch.url(in: dataDirectory)))
@@ -34,13 +40,10 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
             self.display(self.latestSpeed)
         }
         let entry = statusEntry
-        hover = StatusHover(item: entry.item, networkRegion: { [weak entry] frame in
-            entry?.networkRegion(of: frame) ?? frame
-        }, showsButtonTooltip: { [weak entry] in entry?.isSplit != true },
-           menuIsOpening: { [weak entry] in entry?.isOpeningMenu == true })
-        hover.readTimeline = { [weak probes] in probes?.monitor.timeline ?? ProbeTimeline() }
-        hover.probeNow = { [weak probes] in _ = probes?.monitor.probeNow() }
-        probes.monitor.timingDidChange = { [weak self] in self?.hover.refreshTiming() }
+        networkPanel.setTooltip = { [weak entry] in entry?.item.button?.toolTip = entry?.isSplit == true ? nil : $0 }
+        networkPanel.readTimeline = { [weak probes] in probes?.monitor.timeline ?? ProbeTimeline() }
+        networkPanel.probeNow = { [weak probes] in _ = probes?.monitor.probeNow() }
+        probes.monitor.timingDidChange = { [weak self] in self?.networkPanel.refreshTiming() }
         connectPanels(to: entry)
         connectShortcuts()
         let menu = NSMenu()
@@ -55,6 +58,7 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
         menu.addItem(.separator())
         menu.addItem(stopwatch.menuItem)
         menu.addItem(hearing.menuItem)
+        menu.addItem(systemStatus.menuItem)
         menu.addItem(.separator())
         menu.addItem(login.item)
         let quit = menu.addItem(withTitle: "退出", action: #selector(quitApp), keyEquivalent: "q")
@@ -62,6 +66,7 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
         entry.installMenu(menu)
         stopwatch.restore()
         hearing.restore()
+        systemStatus.restore()
         let center = NSWorkspace.shared.notificationCenter
         center.addObserver(self, selector: #selector(systemWillSleep), name: NSWorkspace.willSleepNotification, object: nil)
         center.addObserver(self, selector: #selector(systemWillPowerOff), name: NSWorkspace.willPowerOffNotification, object: nil)
@@ -74,34 +79,39 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
     }
 
     private func connectPanels(to entry: StatusEntry) {
-        entry.onLayoutChange = { [weak self] in
-            DispatchQueue.main.async { [weak self] in
-                guard let self, !self.isTerminating else { return }
-                self.hover.trackAnchor { self.statusEntry.region(.network, on: $0) }
-                self.stopwatch.trackPanelAnchor { self.statusEntry.region(.stopwatch, on: $0) }
-                self.hearing.trackPanelAnchor { self.statusEntry.region(.hearing, on: $0) }
+        let contents: [(StatusEntry.Region, PanelContent)] = [
+            (.network, networkPanel.panelContent), (.stopwatch, stopwatch.panelContent),
+            (.hearing, hearing.panelContent), (.system, systemStatus.panelContent)
+        ]
+        for (region, content) in contents {
+            let shell = StatusPanelShell(item: entry.item, content: content,
+                                         region: { [weak entry] in entry?.region(region, of: $0) ?? .zero },
+                                         menuIsOpening: { [weak entry] in entry?.isOpeningMenu == true })
+            panels[region] = shell
+        }
+        for (region, shell) in panels {
+            shell.openedChanged = { [weak entry] in entry?.panelVisibilityChanged(region, visible: $0) }
+            shell.containsEntry = { [weak entry] in entry?.containsButton(at: $0) == true }
+            shell.allowsPreview = { [weak self] in self?.panels.values.contains(where: { $0.editing }) != true }
+            shell.didPresentPreview = { [weak self] in
+                for (other, panel) in self?.panels ?? [:] where other != region && panel.previewing { panel.dismissPreview() }
             }
         }
-        entry.onClosePanel = { [weak self] part in
-            switch part {
-            case .hearing: self?.hearing.closePanel()
-            case .stopwatch: self?.stopwatch.closePanel()
-            case .network: break
+        entry.onLayoutChange = { [weak self, weak entry] in
+            DispatchQueue.main.async { [weak self, weak entry] in
+                guard let self, let entry, !isTerminating else { return }
+                for (part, panel) in panels {
+                    if let button = entry.item.button, entry.region(part, of: button.bounds) == nil { panel.hide() }
+                    else { panel.trackAnchor { entry.region(part, on: $0) } }
+                }
             }
         }
+        entry.onClosePanel = { [weak self] part in self?.panels[part]?.hide() }
         entry.onTogglePanel = { [weak self] part, anchor, screen in
-            switch part {
-            case .hearing: self?.hearing.togglePanel(under: anchor, on: screen)
-            case .stopwatch: self?.stopwatch.togglePanel(under: anchor, on: screen)
-            case .network: break
-            }
+            for (other, shell) in self?.panels ?? [:] where other != part { shell.dismissPreview() }
+            self?.panels[part]?.click(under: anchor, on: screen)
         }
-        stopwatch.statusEntryContains = { [weak entry] in entry?.containsButton(at: $0) == true }
-        stopwatch.handlePanelStatusClick = { [weak entry] in entry?.handlePanelStatusClick($0) == true }
-        hearing.containsButton = stopwatch.statusEntryContains
-        hearing.handleStatusClick = stopwatch.handlePanelStatusClick
-        stopwatch.panelVisibilityChanged = { [weak entry] in entry?.panelVisibilityChanged(.stopwatch, visible: $0) }
-        hearing.visibilityChanged = { [weak entry] in entry?.panelVisibilityChanged(.hearing, visible: $0) }
+        systemStatus.didUpdate = { [weak entry] in entry?.updateSystem($0) }
         hearing.didUpdate = { [weak entry] in entry?.updateHearing($0) }
         stopwatch.didUpdate = { [weak entry] in entry?.updateStopwatch($0) }
     }
@@ -124,16 +134,36 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
     }
 
     @objc func startSampling() {
-        guard !isTerminating else { return }
-        stopSampling()
+        guard !isTerminating, !samplingActive else { return }
+        samplingActive = true
+        systemStatus.setAwake(true)
         probes.monitor.start()
-        hover.start()
+        for shell in panels.values { shell.start() }
+        let events: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown, .leftMouseUp]
+        localPointer = NSEvent.addLocalMonitorForEvents(matching: events) { [weak self] event in
+            self?.handlePointer(event, global: false)
+            return event
+        }
+        globalPointer = NSEvent.addGlobalMonitorForEvents(matching: events) { [weak self] event in
+            MainActor.assumeIsolated { self?.handlePointer(event, global: true) }
+        }
         sampler.start()
     }
 
-    @objc private func stopSampling() {
+    private func handlePointer(_ event: NSEvent, global: Bool) {
+        if global, statusEntry.handlePanelStatusClick(event) { return }
+        let pointer = NSEvent.mouseLocation
+        for shell in panels.values { shell.handle(event, at: pointer) }
+    }
+
+    private func stopSampling(rememberPins: Bool = false) {
+        samplingActive = false
+        systemStatus.setAwake(false)
+        for token in [localPointer, globalPointer].compactMap({ $0 }) { NSEvent.removeMonitor(token) }
+        localPointer = nil
+        globalPointer = nil
         sampler.stop()
-        hover.stop()
+        for shell in panels.values { shell.stop(rememberPins: rememberPins) }
         probes.monitor.stop()
         display(nil)
     }
@@ -143,13 +173,13 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
         latestSpeed = speed
         let state = probes.state
         statusEntry.updateNetwork(speed: speed, connectivity: state)
-        hover.update(state)
+        networkPanel.update(state)
     }
 
     @objc func systemWillSleep() {
-        hearing.closePanel()
+        guard samplingActive else { return }
         stopwatch.pauseForSystemSleep()
-        stopSampling()
+        stopSampling(rememberPins: true)
     }
 
     @objc private func systemWillPowerOff() { stopwatch.pauseForSystemSleep() }
@@ -157,19 +187,17 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
     func applicationDidChangeScreenParameters(_ notification: Notification) { resetHoverPosition() }
 
     @objc private func resetHoverPosition() {
-        hover?.resetPosition()
-        stopwatch.closePanel()
-        hearing.closePanel()
+        panels.values.forEach { $0.resetPosition() }
     }
 
     func menuWillOpen(_ menu: NSMenu) {
         probes.refreshSiteMenu(menu, rebuilding: true)
-        hover.setMenuOpen(true)
+        panels.values.forEach { $0.setMenuOpen(true) }
         systemSleep.refresh()
         login.refresh()
     }
 
-    func menuDidClose(_ menu: NSMenu) { hover.setMenuOpen(false) }
+    func menuDidClose(_ menu: NSMenu) { panels.values.forEach { $0.setMenuOpen(false) } }
 
     @objc private func quitApp() {
         // Leave AppKit's menu selection stack before starting termination.
@@ -183,6 +211,7 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
         toast.hide()
         statusEntry.removeForExit()
         // Runtime cleanup must not resize or repaint the removed status item.
+        systemStatus.didUpdate = nil
         hearing.didUpdate = nil
         stopwatch.didUpdate = nil
         stopwatch.stopForExit()

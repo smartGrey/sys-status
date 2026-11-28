@@ -25,7 +25,6 @@
         "FileToolTests/testMenuActionsSelectionCancellationAndResults()",
         "FileToolTests/testResultPanelSelectionsFromMenu()",
         "HearingIntegrationTests",
-        "MenuInteractionTests/testPrimaryDismissalClickSwitchesPanelOrReopensSecondaryMenu()",
         "ProbeTransportTests",
         "ShortcutTests/testSystemRegistrationIsExclusiveAndCanBeReacquired()",
         "SiteEditorLayoutTests",

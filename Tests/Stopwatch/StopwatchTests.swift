@@ -285,7 +285,7 @@ final class StopwatchIntegrationTests: XCTestCase {
         entry.updateStopwatch(state.presentation(at: 3600))
         let button = try XCTUnwrap(entry.item.button)
         XCTAssertTrue(try XCTUnwrap(button.accessibilityValue() as? String).contains("散步计时表"))
-        XCTAssertEqual(button.accessibilityCustomActions()?.map(\.name), ["打开秒表面板"])
+        XCTAssertEqual(button.accessibilityCustomActions()?.map(\.name), ["打开网络状况", "打开秒表面板", "打开总菜单"])
         XCTAssertLessThan(entry.networkRegion(of: button.bounds).width, button.bounds.width)
         XCTAssertNil(entry.item.menu)
 
@@ -301,7 +301,7 @@ final class StopwatchIntegrationTests: XCTestCase {
         XCTAssertEqual(entry.item.length, original)
         XCTAssertNil(entry.item.menu)
         XCTAssertNotNil(button.action)
-        XCTAssertTrue(button.accessibilityCustomActions()?.isEmpty ?? true)
+        XCTAssertEqual(button.accessibilityCustomActions()?.map(\.name), ["打开网络状况", "打开总菜单"])
         XCTAssertEqual(button.accessibilityLabel(), "网速")
     }
 

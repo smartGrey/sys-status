@@ -101,18 +101,18 @@ final class StatusPresentationTests: XCTestCase {
         let source = NSRect(x: -1920, y: 37, width: 1920, height: 1080)
         let button = NSRect(x: -548, y: 1090.5, width: 34, height: 22)
         let external = NSRect(x: -3200, y: -229, width: 1280, height: 1440)
-        let externalButton = try XCTUnwrap(StatusHover.replicaFrame(of: button, from: source, to: external,
+        let externalButton = try XCTUnwrap(StatusPanelShell.replicaFrame(of: button, from: source, to: external,
                                                                    topRightArea: nil))
         XCTAssertEqual(externalButton, NSRect(x: -2468, y: 1184.5, width: 34, height: 22))
 
         let builtIn = NSRect(x: 0, y: 0, width: 1728, height: 1117)
         let rightOfNotch = NSRect(x: 956.5, y: 1085, width: 771.5, height: 32)
-        let builtInButton = try XCTUnwrap(StatusHover.replicaFrame(of: button, from: source, to: builtIn,
+        let builtInButton = try XCTUnwrap(StatusPanelShell.replicaFrame(of: button, from: source, to: builtIn,
                                                                   topRightArea: rightOfNotch))
         XCTAssertEqual(builtInButton, NSRect(x: 1180, y: 1090.5, width: 34, height: 22))
-        XCTAssertNil(StatusHover.replicaFrame(of: button.offsetBy(dx: -250, dy: 0), from: source, to: builtIn,
+        XCTAssertNil(StatusPanelShell.replicaFrame(of: button.offsetBy(dx: -250, dy: 0), from: source, to: builtIn,
                                               topRightArea: rightOfNotch))
-        XCTAssertNil(StatusHover.replicaFrame(of: button.offsetBy(dx: 0, dy: -60), from: source, to: external,
+        XCTAssertNil(StatusPanelShell.replicaFrame(of: button.offsetBy(dx: 0, dy: -60), from: source, to: external,
                                               topRightArea: nil))
     }
 
@@ -128,9 +128,10 @@ final class StatusPresentationTests: XCTestCase {
         let entry = StatusEntry()
         defer { entry.removeForExit() }
         let button = try XCTUnwrap(entry.item.button)
-        let hover = StatusHover(item: entry.item)
+        let network = NetworkPanel()
+        network.setTooltip = { button.toolTip = $0 }
         entry.updateNetwork(speed: nil, connectivity: state)
-        hover.update(state)
+        network.update(state)
         XCTAssertEqual(button.toolTip, state.hoverTooltip)
         XCTAssertEqual(button.accessibilityHelp(), state.summary)
         XCTAssertTrue(state.summary.contains(row.name + "，复用 132 ms，新建 非预期状态码 403"))
@@ -183,7 +184,8 @@ final class StatusPresentationTests: XCTestCase {
     func testHoverDwellRequiresPointerToRemainOverNetwork() async throws {
         let screen = try XCTUnwrap(NSScreen.screens.first)
         let entry = StatusEntry()
-        let hover = StatusHover(item: entry.item)
+        let network = NetworkPanel()
+        let hover = StatusPanelShell(item: entry.item, content: network.panelContent)
         defer { hover.stop(); entry.removeForExit() }
         let anchor = NSRect(x: screen.frame.midX, y: screen.visibleFrame.maxY, width: 40, height: 24)
         let inside = NSPoint(x: anchor.midX, y: anchor.midY)
@@ -214,11 +216,12 @@ final class StatusPresentationTests: XCTestCase {
         let bounds = screen.visibleFrame
         let anchor = NSRect(x: bounds.midX, y: bounds.maxY, width: 40, height: 24)
         let entry = StatusEntry()
-        let hover = StatusHover(item: entry.item)
+        let network = NetworkPanel()
+        let hover = StatusPanelShell(item: entry.item, content: network.panelContent)
         defer { hover.stop(); entry.removeForExit() }
         hover.resetPosition()
         let row = ConnectivityState.Row(id: "site", name: "站点", enabled: true)
-        hover.update(.init(rows: [row]))
+        network.update(.init(rows: [row]))
         let key = NSApp.keyWindow
         hover.show(under: anchor, within: screen.visibleFrame)
         let panel = try XCTUnwrap(NSApp.windows.first { $0.title == "网络状况" && $0.isVisible })
@@ -263,10 +266,10 @@ final class StatusPresentationTests: XCTestCase {
         let moved = panel.frame
         hover.trackAnchor { _ in XCTFail("A pinned panel must not follow the menu bar"); return anchor }
         hover.setMenuOpen(true)
-        hover.update(.init(rows: [row], rate: "10 KB/h"))
+        network.update(.init(rows: [row], rate: "10 KB/h"))
         XCTAssertTrue(panel.isVisible)
         XCTAssertEqual(panel.frame, moved)
-        hover.update(.init(rows: [row, row]))
+        network.update(.init(rows: [row, row]))
         XCTAssertEqual(panel.frame.minX, moved.minX)
         XCTAssertEqual(panel.frame.maxY, moved.maxY)
         pin.performClick(nil)
@@ -301,9 +304,9 @@ final class StatusPresentationTests: XCTestCase {
     func testHoverBridgeAndButtonOnFirstClick() throws {
         let anchor = NSRect(x: -180, y: 800, width: 40, height: 24)
         let panel = NSRect(x: -790, y: 580, width: 780, height: 216)
-        XCTAssertTrue(StatusHover.retainsHover(at: .init(x: -170, y: 798), anchor: anchor, panel: panel))
-        XCTAssertTrue(StatusHover.retainsHover(at: .init(x: -20, y: 588), anchor: anchor, panel: panel))
-        XCTAssertFalse(StatusHover.retainsHover(at: .init(x: -30, y: 798), anchor: anchor, panel: panel))
+        XCTAssertTrue(StatusPanelShell.retainsHover(at: .init(x: -170, y: 798), anchor: anchor, panel: panel))
+        XCTAssertTrue(StatusPanelShell.retainsHover(at: .init(x: -20, y: 588), anchor: anchor, panel: panel))
+        XCTAssertFalse(StatusPanelShell.retainsHover(at: .init(x: -30, y: 798), anchor: anchor, panel: panel))
         let now = ProcessInfo.processInfo.systemUptime
         let card = HoverCard()
         let sites = [ConnectivityState.Row(id: "g", name: "Google", enabled: true,

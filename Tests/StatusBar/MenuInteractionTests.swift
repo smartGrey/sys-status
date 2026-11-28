@@ -15,7 +15,7 @@ final class MenuInteractionTests: XCTestCase {
         }
     }
 
-    func testPrimaryDismissalClickSwitchesPanelOrReopensSecondaryMenu() throws {
+    func testPrimaryDismissalClickSwitchesDirectlyToEachPanel() throws {
         _ = NSApplication.shared
         let screen = try XCTUnwrap(NSScreen.screens.first)
         let entry = StatusEntry()
@@ -24,20 +24,22 @@ final class MenuInteractionTests: XCTestCase {
         state.setEnabled(true, at: 0)
         entry.updateStopwatch(state.presentation(at: 0))
         entry.updateHearing(.init(icon: .init(enabled: false, passing: false, level: 0), title: "已关闭"))
+        entry.updateSystem(SystemStatusFace(reading: SystemReading(), metrics: []))
         var opened: [StatusEntry.Region] = [], closed: [StatusEntry.Region] = []
         entry.onTogglePanel = { part, _, _ in opened.append(part); entry.panelVisibilityChanged(part, visible: true) }
         entry.onClosePanel = { part in closed.append(part); entry.panelVisibilityChanged(part, visible: false) }
         let frame = CGRect(x: 100, y: 800, width: entry.item.length, height: 24)
-        for part in [StatusEntry.Region.stopwatch, .hearing, .network] {
+        for part in [StatusEntry.Region.stopwatch, .system, .hearing, .network] {
             let region = try XCTUnwrap(entry.region(part, of: frame))
-            entry.handOffMenuClick(at: CGPoint(x: region.midX, y: region.midY), in: frame, on: screen, openedBySecondaryClick: false)
+            entry.handOffMenuClick(at: CGPoint(x: region.midX, y: region.midY), in: frame, on: screen)
         }
-        XCTAssertEqual(opened, [.stopwatch, .hearing])
-        XCTAssertEqual(closed, [.stopwatch])
+        XCTAssertEqual(opened, [.stopwatch, .system, .hearing, .network])
+        XCTAssertEqual(closed, [.stopwatch, .system, .hearing])
         XCTAssertFalse(entry.isOpeningMenu)
         let network = entry.networkRegion(of: frame)
-        entry.handOffMenuClick(at: CGPoint(x: network.midX, y: network.midY), in: frame, on: screen, openedBySecondaryClick: true)
-        XCTAssertTrue(entry.isOpeningMenu)
+        entry.handOffMenuClick(at: CGPoint(x: network.midX, y: network.midY), in: frame, on: screen)
+        XCTAssertFalse(entry.isOpeningMenu)
+        XCTAssertEqual(opened.last, .network)
         entry.removeForExit()
         XCTAssertFalse(entry.isOpeningMenu)
     }

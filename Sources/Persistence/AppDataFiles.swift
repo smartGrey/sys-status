@@ -5,6 +5,7 @@ enum AppDataFile: String {
     case stopwatch = "stopwatch.json"
     case hearing = "hearing.json"
     case volumeKeys = "volume-keys.json"
+    case systemStatus = "system-status.json"
 
     static let directory = URL.applicationSupportDirectory.appending(path: "NetRate", directoryHint: .isDirectory)
 

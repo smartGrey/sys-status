@@ -1,8 +1,12 @@
 import AppKit
 
-class StopwatchFlippedView: NSView {
+class StopwatchFlippedView: PanelDragView {
     override var isFlipped: Bool { true }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let view = super.hitTest(point)
+        if let label = view as? NSTextField, !label.isEditable, !label.isSelectable { return self }
+        return view
+    }
 }
 
 @MainActor

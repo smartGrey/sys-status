@@ -2,118 +2,86 @@ import AppKit
 import QuartzCore
 
 @MainActor
-final class StatusHover {
+final class StatusPanelShell {
     private let item: NSStatusItem
-    private let networkRegion: (NSRect) -> NSRect
-    private let showsButtonTooltip: () -> Bool
+    private let region: (NSRect) -> NSRect
+    private let content: PanelContent
+    var allowsPreview: () -> Bool = { true }
+    var didPresentPreview: (() -> Void)?
+    var openedChanged: ((Bool) -> Void)?
+    var containsEntry: (NSPoint) -> Bool = { _ in false }
+    private(set) var opened = false
+    private var waitingForWake: NSRect?
+    var editing: Bool { panel?.isVisible == true && (content.isEditing() || panel?.protectsInteraction() == true || (panel?.firstResponder as? NSTextView)?.isFieldEditor == true) }
+    var previewing: Bool { anchor != nil && !opened && !isPinned }
     private let menuIsOpening: () -> Bool
-    private var globalMonitor: Any?
-    private var localMonitor: Any?
     private var screens: [NSScreen] = []
     private var menuBarWindow: (id: CGWindowID, bounds: CGRect?)?
-    private var connectivity = ConnectivityState()
     private var menuIsOpen = false
+    private var suppressedAnchor: NSRect?
     private var anchor: NSRect?
-    private var panel: NSPanel?
-    private var isPinned: Bool { panel?.isMovable == true }
-    var readTimeline: () -> ProbeTimeline = { ProbeTimeline() }
-    var probeNow: (() -> Void)?
+    private var panel: StatusPanelWindow?
+    var isPinned: Bool { panel?.isMovable == true }
     private var presentation: (anchor: NSRect, timer: Timer)?
     private var dismissal: Timer?
-    private lazy var card: HoverCard = {
-        let card = HoverCard()
-        card.probeNow = { [weak self] in self?.probeNow?() }
-        card.togglePin = { [weak self] in self?.togglePin() }
-        card.beginDrag = { [weak self] in self?.pinPanel() }
-        return card
-    }()
-
-    func refreshTiming() {
-        guard anchor != nil else { return }
-        card.setTimeline(readTimeline())
-    }
-
-    init(item: NSStatusItem, networkRegion: @escaping (NSRect) -> NSRect = { $0 },
-         showsButtonTooltip: @escaping () -> Bool = { true }, menuIsOpening: @escaping () -> Bool = { false }) {
+    init(item: NSStatusItem, content: PanelContent, region: @escaping (NSRect) -> NSRect = { $0 },
+         menuIsOpening: @escaping () -> Bool = { false }) {
         self.item = item
-        self.networkRegion = networkRegion
-        self.showsButtonTooltip = showsButtonTooltip
+        self.content = content
+        self.region = region
         self.menuIsOpening = menuIsOpening
-        updateButtonTooltip()
-    }
-
-    private func updateButtonTooltip() {
-        item.button?.toolTip = showsButtonTooltip() ? connectivity.hoverTooltip : nil
     }
 
     func start() {
-        resetPosition()
-        let events: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown]
-        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: events) { [weak self] event in
-            MainActor.assumeIsolated { self?.handle(event) }
-        }
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: events) { [weak self] event in
-            self?.handle(event)
-            return event
+        screens = NSScreen.screens
+        if let previous = waitingForWake, let screen = screens.first(where: { $0.frame.intersects(previous) }) ?? screens.first {
+            waitingForWake = nil
+            let rect = NSRect(x: screen.visibleFrame.midX, y: screen.visibleFrame.maxY, width: 1, height: 1)
+            show(under: rect, within: screen.visibleFrame)
+            pinPanel()
+            if let panel { panel.setFrame(StatusPanelGeometry.pinnedFrame(size: panel.frame.size, previous: previous, within: screen.visibleFrame), display: true) }
         }
     }
 
-    func stop() {
-        if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
-        if let localMonitor { NSEvent.removeMonitor(localMonitor) }
-        globalMonitor = nil
-        localMonitor = nil
+    func stop(rememberPins: Bool = false) {
+        waitingForWake = rememberPins && isPinned ? panel?.frame : nil
         hide()
     }
 
     func resetPosition() {
         screens = NSScreen.screens
         menuBarWindow = nil
-        if isPinned {
-            layoutPinned(constrain: true)
+        if isPinned, let panel, let screen = panel.screen ?? screens.first {
+            panel.setFrame(StatusPanelGeometry.pinnedFrame(size: panel.frame.size, previous: panel.frame, within: screen.visibleFrame), display: true)
         } else {
             hide()
-            updateButtonTooltip()
         }
     }
 
     func trackAnchor(_ resolve: (NSScreen) -> NSRect?) {
         guard !isPinned else { return }
         cancelPresentation()
-        guard let anchor else { updateButtonTooltip(); return }
+        guard let anchor else { return }
         guard let screen = screens.first(where: { $0.frame.contains(anchor) }),
               let rect = resolve(screen) else { hide(); return }
         self.anchor = rect
-        layoutCard(under: rect, on: screen.visibleFrame)
+        content.follow(rect, screen)
     }
 
     func setMenuOpen(_ open: Bool) {
         menuIsOpen = open
-        if open && !isPinned { hide() }
+        if open { cancelPresentation(); if !isPinned { hide() } }
     }
 
-    func update(_ state: ConnectivityState) {
-        guard connectivity != state else { return }
-        connectivity = state
-        if isPinned {
-            layoutPinned()
-        } else if anchor == nil {
-            updateButtonTooltip()
-        } else {
-            if let anchor, let screen = screens.first(where: { $0.frame.contains(anchor) }) {
-                layoutCard(under: anchor, on: screen.visibleFrame)
-            }
-        }
-    }
-
-    private func handle(_ event: NSEvent) {
+    func handle(_ event: NSEvent, at pointer: NSPoint) {
         guard !isPinned else { return }
-        if event.type == .mouseMoved {
-            updatePosition(for: event.cgEvent)
-        } else if let panel, event.window === panel {
+        if event.type == .mouseMoved || event.type == .leftMouseUp {
+            guard !opened, event.type == .mouseMoved || previewing else { return }
+            updatePosition(for: event.cgEvent, at: pointer)
+        } else if let panel, event.window === panel || event.window?.parent === panel || panel.protectsInteraction() {
             cancelDismissal()
-        } else if panel?.isVisible != true || panel?.frame.contains(NSEvent.mouseLocation) != true {
-            hide()
+        } else if panel?.isVisible != true || panel?.frame.contains(pointer) != true {
+            if !containsEntry(pointer) { hide() }
         }
     }
 
@@ -130,16 +98,23 @@ final class StatusHover {
 
     private func deferDismissal() {
         cancelPresentation()
-        guard anchor != nil, dismissal == nil else { return }
+        guard previewing, !editing, dismissal == nil else { return }
         let timer = Timer(timeInterval: 0.18, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.hide() }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.dismissal = nil
+                if self.previewing && !self.editing && NSEvent.pressedMouseButtons == 0 { self.hide() }
+            }
         }
         dismissal = timer
         RunLoop.main.add(timer, forMode: .common)
     }
 
-    private func updatePosition(for event: CGEvent?) {
-        let pointer = NSEvent.mouseLocation
+    private func updatePosition(for event: CGEvent?, at pointer: NSPoint) {
+        if let suppressedAnchor {
+            if suppressedAnchor.contains(pointer) { return }
+            self.suppressedAnchor = nil
+        }
         if !menuIsOpen, !menuIsOpening(), let anchor, let panel,
            Self.retainsHover(at: pointer, anchor: anchor, panel: panel.frame) {
             cancelDismissal()
@@ -160,6 +135,7 @@ final class StatusHover {
             return
         }
 
+        guard allowsPreview(), NSEvent.pressedMouseButtons == 0 else { cancelPresentation(); return }
         if anchor == nil {
             schedulePresentation(under: rect, within: visibleFrame)
         } else {
@@ -180,8 +156,8 @@ final class StatusHover {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.presentation = nil
-                guard !self.menuIsOpen, !self.menuIsOpening(), self.item.isVisible,
-                      rect.contains(pointerLocation()) else { return }
+                guard !self.menuIsOpen, !self.menuIsOpening(), self.item.isVisible, self.allowsPreview(), !self.opened, !self.isPinned,
+                      NSEvent.pressedMouseButtons == 0, rect.contains(pointerLocation()) else { return }
                 self.show(under: rect, within: visibleFrame)
             }
         }
@@ -194,16 +170,41 @@ final class StatusHover {
         cancelPresentation()
         cancelDismissal()
         guard anchor != rect else { return }
-        let panel = panel ?? makePanel()
-        layoutCard(under: rect, on: visibleFrame)
-        if anchor == nil {
-            item.button?.toolTip = nil
-            card.setTimeline(readTimeline())
-            card.setVisible(true)
+        let wasHidden = anchor == nil
+        guard let screen = NSScreen.screens.first(where: { $0.visibleFrame == visibleFrame }) ?? NSScreen.main else { return }
+        if wasHidden {
+            guard let window = content.show(rect, screen, opened) else { return }
+            panel = window
+            window.isMovable = false
+            window.togglePinned = { [weak self] in self?.togglePin() }
+            window.beginPinning = { [weak self] in self?.pinPanel() }
+            window.dismissPanel = { [weak self] in self?.hide() }
+        } else { content.follow(rect, screen) }
+        anchor = rect
+        if wasHidden, let panel {
+            if !opened { didPresentPreview?() }
+            panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + (opened ? 0 : 1))
             reveal(panel)
         }
-        anchor = rect
     }
+
+    func click(under rect: NSRect, on screen: NSScreen) {
+        if isPinned { panel?.orderFrontRegardless(); return }
+        if opened {
+            suppressedAnchor = rect
+            hide()
+            return
+        }
+        cancelDismissal()
+        opened = true
+        show(under: rect, within: screen.visibleFrame)
+        guard let panel, panel.isVisible else { opened = false; return }
+        panel.level = .statusBar
+        panel.makeKeyAndOrderFront(nil)
+        openedChanged?(true)
+    }
+
+    func dismissPreview() { cancelPresentation(); if previewing { hide() } }
 
     private func reveal(_ panel: NSPanel) {
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -229,23 +230,9 @@ final class StatusHover {
         guard !isPinned, let panel, panel.isVisible else { return }
         cancelDismissal()
         panel.isMovable = true
-        card.setPinned(true)
-    }
-
-    private func layoutPinned(constrain: Bool = false) {
-        guard let panel, let screen = panel.screen ?? screens.first else { return }
-        let bounds = screen.visibleFrame
-        let size = card.update(connectivity, availableHeight: bounds.height, availableWidth: bounds.width)
-        guard constrain || panel.frame.size != size else { return }
-        let frame = StatusPanelGeometry.pinnedFrame(size: size, previous: panel.frame, within: bounds)
-        if panel.frame != frame { panel.setFrame(frame, display: true) }
-    }
-
-    private func layoutCard(under rect: NSRect, on screen: NSRect) {
-        let availableHeight = StatusPanelGeometry.top(under: rect, within: screen) - screen.minY
-        let size = card.update(connectivity, availableHeight: availableHeight, availableWidth: screen.width)
-        let frame = StatusPanelGeometry.frame(size: size, under: rect, within: screen)
-        if panel?.frame != frame { panel?.setFrame(frame, display: true) }
+        panel.level = .statusBar
+        if opened { opened = false; openedChanged?(false) }
+        panel.pinChanged?(true)
     }
 
     private func hoverFrame(button: NSRect, pointer: NSPoint, screen: NSScreen, event: CGEvent?) -> NSRect? {
@@ -263,8 +250,8 @@ final class StatusHover {
             else { return nil }
             frame = projected
         }
-        let network = networkRegion(frame)
-        return network.contains(pointer) ? network : nil
+        let target = region(frame)
+        return target.contains(pointer) ? target : nil
     }
 
     private func isOverMenuBar(_ event: CGEvent, screen: NSRect) -> Bool {
@@ -292,36 +279,17 @@ final class StatusHover {
             abs(bounds.minY - screenTop) < 1 && bounds.contains(event.location)
     }
 
-    private func hide() {
+    func hide() {
         cancelPresentation()
         cancelDismissal()
         guard anchor != nil else { return }
-        card.setVisible(false)
+        if opened { opened = false; openedChanged?(false) }
         panel?.isMovable = false
-        card.setPinned(false)
+        panel?.pinChanged?(false)
         anchor = nil
-        panel?.orderOut(nil)
+        content.close()
         panel?.alphaValue = 1
-        updateButtonTooltip()
-    }
-
-    private func makePanel() -> NSPanel {
-        let panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
-                            backing: .buffered, defer: false)
-        panel.title = "网络状况"
-        panel.isMovable = false
-        panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
-        panel.acceptsMouseMovedEvents = true
-        panel.becomesKeyOnlyIfNeeded = true
-        panel.hidesOnDeactivate = false
-        panel.animationBehavior = .none
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.contentView = card
-        self.panel = panel
-        return panel
+        panel = nil
     }
 
     static func replicaFrame(of button: NSRect, from source: NSRect, to destination: NSRect,

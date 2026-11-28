@@ -16,7 +16,8 @@ struct HearingPanelView: View {
                 LiveThresholdSlider(meter: model.meter,
                                     value: Binding(get: { model.preferences.thresholdDB }, set: { model.setThreshold($0) }),
                                     recommendations: model.recommendations)
-                calibration
+                    .background(PanelControlRegion())
+                calibration.background(PanelControlRegion())
             }
             parameter("透传音量", value: String(format: "%+.0f dB", model.preferences.gainDB)) {
                 Slider(value: Binding(get: { model.preferences.gainDB }, set: { model.setGain($0) }),
@@ -40,22 +41,24 @@ struct HearingPanelView: View {
                     Text(notice).fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
                     Button { model.dismissNotice() } label: { Image(systemName: "xmark") }
-                        .buttonStyle(.plain).accessibilityLabel("关闭提示")
+                        .buttonStyle(.plain).background(PanelControlRegion()).accessibilityLabel("关闭提示")
                 }.font(.caption).foregroundStyle(.secondary)
             }
             Divider()
             HStack(alignment: .top) {
                 Toggle("开启环境声透传", isOn: Binding(get: { model.preferences.enabled }, set: { model.setEnabled($0) }))
-                    .toggleStyle(.switch).controlSize(.small).labelsHidden()
+                    .toggleStyle(.switch).controlSize(.small).labelsHidden().background(PanelControlRegion())
                     .accessibilityLabel("开启环境声透传")
                 Spacer(minLength: 12)
                 VStack(alignment: .trailing, spacing: 4) {
-                    ShortcutView(controller: model.shortcuts)
-                    ShortcutMessage(controller: model.shortcuts)
+                    ShortcutView(controller: model.shortcuts).background(PanelControlRegion())
+                    ShortcutMessage(controller: model.shortcuts).background(PanelControlRegion())
                 }
             }
         }
         .padding(20)
+        .background(PanelDragBackground())
+        .allowsWindowActivationEvents()
         .frame(width: contentWidth)
         .fixedSize(horizontal: false, vertical: true)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
@@ -90,7 +93,7 @@ struct HearingPanelView: View {
                                          @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             parameterLabel(name, value: value)
-            content().controlSize(.small)
+            content().controlSize(.small).background(PanelControlRegion())
         }
     }
     private var calibration: some View {
@@ -149,7 +152,7 @@ struct HearingPanelView: View {
                     Toggle("允许 \(row.name)", isOn: Binding(
                         get: { model.preferences.allows(row.key) },
                         set: { model.setAllowed(row, allowed: $0) }))
-                        .toggleStyle(.switch).controlSize(.mini).labelsHidden()
+                        .toggleStyle(.switch).controlSize(.mini).labelsHidden().background(PanelControlRegion())
                         .accessibilityLabel("允许 \(row.name) 播放环境声")
                 }
             }
