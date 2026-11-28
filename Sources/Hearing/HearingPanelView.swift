@@ -61,8 +61,6 @@ struct HearingPanelView: View {
         .allowsWindowActivationEvents()
         .frame(width: contentWidth)
         .fixedSize(horizontal: false, vertical: true)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
         .tint(Palette.accent)
         .onGeometryChange(for: CGSize.self) { $0.size } action: { onContentSizeChange($0) }
     }

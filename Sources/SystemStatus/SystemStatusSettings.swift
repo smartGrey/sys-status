@@ -32,9 +32,9 @@ enum StatusMetric: String, CaseIterable, Codable, Identifiable {
         case .cpu: "C"
         case .memory: "M"
         case .disk: "D"
-        case .cpuTemperature: "CPU温"
-        case .gpuTemperature: "GPU温"
-        case .batteryTemperature: "电池温"
+        case .cpuTemperature: "C温"
+        case .gpuTemperature: "G温"
+        case .batteryTemperature: "电温"
         }
     }
     var isTemperature: Bool { self == .cpuTemperature || self == .gpuTemperature || self == .batteryTemperature }
@@ -44,15 +44,26 @@ struct SystemStatusSettings: Codable, Equatable {
     var version = 1
     var enabled = false
     var metrics: [StatusMetric] = []
+    // Optional keys keep existing version-one documents readable.
+    var inactiveMetricOrder: [StatusMetric]?
+    var metricColors: [String: MetricColor]?
+    var inactiveMetrics: [StatusMetric] {
+        var seen = Set(metrics)
+        return ((inactiveMetricOrder ?? []) + StatusMetric.allCases).filter { seen.insert($0).inserted }
+    }
+    func color(for metric: StatusMetric) -> MetricColor {
+        metricColors?[metric.rawValue] ?? .standard(for: metric)
+    }
     var modules = ResourceModule.allCases
     var hidden: Set<ResourceModule> = []
     var width: Double = 580
-    var height: Double = 380
+    var height: Double = 426
     static let minimum = CGSize(width: 292, height: 190)
 
     mutating func normalize() {
         var seenMetrics: Set<StatusMetric> = []
         metrics = metrics.filter { seenMetrics.insert($0).inserted }
+        if inactiveMetricOrder != nil { inactiveMetricOrder = inactiveMetrics }
         var seenModules: Set<ResourceModule> = []
         modules = (modules + ResourceModule.allCases).filter { seenModules.insert($0).inserted }
         width = max(Self.minimum.width, width)
@@ -72,9 +83,10 @@ struct BatteryReading: Equatable, Sendable {
     var designCapacity: Int?
     var cycles: Int?
     var health: Int?
-    var source: String { connected ? (charging ? "正在充电" : full ? "已充满" : "已接电 · 未充电") : "电池供电" }
+    var isActivelyCharging: Bool { connected && charging && !full }
+    var source: String { connected ? (full ? "已充满" : charging ? "正在充电" : "已接电 · 未充电") : "电池供电" }
     var timeLabel: String {
-        guard charging || !connected else { return full ? "已充满" : "未在充电" }
+        guard isActivelyCharging || !connected else { return full ? "已充满" : "未在充电" }
         guard let minutes, minutes >= 0 else { return "估算中" }
         return String(format: "%d 小时 %02d 分", minutes/60, minutes%60)
     }

@@ -1,6 +1,7 @@
 import Foundation
 
 enum AppDataFile: String {
+    case preferences = "status-bar.json"
     case probes = "config.json"
     case stopwatch = "stopwatch.json"
     case hearing = "hearing.json"

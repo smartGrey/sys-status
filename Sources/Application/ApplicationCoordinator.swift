@@ -4,6 +4,7 @@ import AppKit
 final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private(set) lazy var statusEntry = StatusEntry()
     let stopwatch: StopwatchController
+    private let preferences: StatusPreferences
     let systemStatus: SystemStatusController
     private let hearing: HearingController
     private let networkPanel = NetworkPanel()
@@ -24,6 +25,7 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
                                              networkChanged: { [weak self] in self?.probes.monitor.networkDidChange() })
 
     init(dataDirectory: URL = AppDataFile.directory, defaults: UserDefaults = .standard) {
+        preferences = StatusPreferences(url: AppDataFile.preferences.url(in: dataDirectory))
         systemStatus = SystemStatusController(url: AppDataFile.systemStatus.url(in: dataDirectory))
         probes = ProbeController(store: ProbeConfigurationStore(url: AppDataFile.probes.url(in: dataDirectory), defaults: defaults))
         volumeKeys = VolumeKeyMenu(store: VolumeKeyStore(url: AppDataFile.volumeKeys.url(in: dataDirectory), defaults: defaults))
@@ -61,6 +63,13 @@ final class ApplicationCoordinator: NSObject, NSApplicationDelegate, NSMenuDeleg
         menu.addItem(systemStatus.menuItem)
         menu.addItem(.separator())
         menu.addItem(login.item)
+        let settings = menu.addItem(withTitle: "偏好设置", action: #selector(StatusPreferences.show), keyEquivalent: ",")
+        settings.target = preferences
+        preferences.didChange = { [weak entry] in entry?.applyOrder($0) }
+        entry.onModulesChanged = { [weak preferences, weak entry] in
+            preferences?.enabled = Set(entry?.enabledModules ?? [])
+        }
+        preferences.restore()
         let quit = menu.addItem(withTitle: "退出", action: #selector(quitApp), keyEquivalent: "q")
         quit.target = self
         entry.installMenu(menu)

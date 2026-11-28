@@ -60,7 +60,14 @@ final class StatusPanelShell {
 
     func trackAnchor(_ resolve: (NSScreen) -> NSRect?) {
         guard !isPinned else { return }
-        cancelPresentation()
+        if let pending = presentation?.anchor {
+            // A change of digit count can resize the strip while the pointer is
+            // stationary. Keep the pending hover if it still hits this module.
+            if let screen = screens.first(where: { $0.frame.contains(pending) }),
+               let next = resolve(screen), next.contains(NSEvent.mouseLocation) {
+                schedulePresentation(under: next, within: screen.visibleFrame)
+            } else { cancelPresentation() }
+        }
         guard let anchor else { return }
         guard let screen = screens.first(where: { $0.frame.contains(anchor) }),
               let rect = resolve(screen) else { hide(); return }

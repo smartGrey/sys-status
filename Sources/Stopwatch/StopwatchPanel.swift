@@ -79,17 +79,6 @@ final class StopwatchPanel {
         window.title = "StopWatch"
         window.setAccessibilityLabel("StopWatch")
 
-        let material = NSVisualEffectView()
-        material.material = .popover
-        material.blendingMode = .behindWindow
-        material.state = .active
-        material.wantsLayer = true
-        material.layer?.cornerRadius = 16
-        material.layer?.cornerCurve = .continuous
-        material.layer?.masksToBounds = true
-        material.layer?.borderWidth = 1
-        material.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.28).cgColor
-
         let content = StopwatchPanelContent()
         content.autoresizingMask = [.width, .height]
         content.onSelect = { [weak self] id in
@@ -124,8 +113,7 @@ final class StopwatchPanel {
             self?.endRecording()
             self?.finishRecording(action, shortcut: nil)
         }
-        material.addSubview(content)
-        _ = PanelChrome(title: "秒表", body: material, window: window)
+        _ = PanelChrome(title: "", body: content, window: window, leadingControl: content.addButton)
         window.dismissPanel = { [weak self] in self?.dismissIfVisible() }
         self.content = content
         self.window = window

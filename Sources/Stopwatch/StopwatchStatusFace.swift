@@ -77,14 +77,10 @@ struct StopwatchStatusFace {
         labels.map(\.id) == other.labels.map(\.id)
     }
 
-    func combinedImage(with network: NSImage, focusAmounts: [CGFloat]? = nil) -> NSImage {
-        let gap = StatusFace.moduleGap
-        let size = NSSize(width: network.size.width + gap + width, height: network.size.height)
+    func image(focusAmounts: [CGFloat]? = nil) -> NSImage {
         let amounts = focusAmounts ?? self.focusAmounts
-        return NSImage(size: size, flipped: false) { bounds in
-            let networkBounds = NSRect(x: bounds.minX, y: bounds.minY, width: network.size.width, height: bounds.height)
-            network.draw(in: networkBounds, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
-            drawLabels(at: networkBounds.maxX + gap, midY: bounds.midY, focusAmounts: amounts)
+        return NSImage(size: NSSize(width: width, height: 20), flipped: false) { bounds in
+            drawLabels(at: 0, midY: bounds.midY, focusAmounts: amounts)
             return true
         }
     }

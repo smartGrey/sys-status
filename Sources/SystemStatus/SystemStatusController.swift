@@ -78,7 +78,7 @@ final class SystemStatusController: NSObject, ObservableObject {
     func setAwake(_ value: Bool) { awake = value; refreshDemand() }
     func setVisible(_ value: Bool) {
         visible = value
-        if !value { choosingMetrics = false; editing = false }
+        if !value { choosingMetrics = false; editing = false; details = false }
         refreshDemand()
     }
 
@@ -92,11 +92,11 @@ final class SystemStatusController: NSObject, ObservableObject {
             self?.presentation?.close()
             self?.presentation = nil
         }, follow: { [weak self] anchor, screen in self?.presentation?.follow(anchor, on: screen) },
-        isEditing: { [weak self] in self?.choosingMetrics == true || self?.editing == true })
+        isEditing: { [weak self] in self?.choosingMetrics == true || self?.editing == true || self?.details == true })
     }
 
     private func publishFace() {
-        didUpdate?(settings.enabled ? SystemStatusFace(reading: reading, metrics: settings.metrics) : nil)
+        didUpdate?(settings.enabled ? SystemStatusFace(reading: reading, metrics: settings.metrics, colors: settings.metricColors ?? [:]) : nil)
     }
     private func refreshDemand() {
         guard awake, settings.enabled else {
@@ -168,7 +168,7 @@ final class SystemStatusPanel: NSObject, NSWindowDelegate {
         window.animationBehavior = .none
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         window.delegate = self
-        window.protectsInteraction = { [weak controller] in controller?.choosingMetrics == true }
+        window.protectsInteraction = { [weak controller] in controller?.choosingMetrics == true || controller?.details == true }
         let body = NSHostingView(rootView: SystemStatusView(model: controller))
         body.sizingOptions = []
         let toolbar = NSHostingView(rootView: SystemStatusToolbar(model: controller))

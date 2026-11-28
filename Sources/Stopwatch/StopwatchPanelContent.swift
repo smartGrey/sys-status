@@ -28,8 +28,7 @@ final class StopwatchPanelContent: StopwatchFlippedView {
     var onClear: ((StopwatchAction) -> Void)?
 
     private var rows: [StopwatchPanelRow] = []
-    private let addButton = NSButton(title: "添加秒表", target: nil, action: nil)
-    private let divider = NSBox()
+    let addButton = NSButton(title: "添加秒表", target: nil, action: nil)
     private let modeLabel = StopwatchPanelContent.caption("模式")
     private let mode = NSSegmentedControl(labels: ["互斥", "并行"], trackingMode: .selectOne, target: nil, action: nil)
     private let modeHint = StopwatchPanelContent.hint()
@@ -59,7 +58,6 @@ final class StopwatchPanelContent: StopwatchFlippedView {
         addButton.setAccessibilityLabel("添加秒表")
         addButton.target = self
         addButton.action = #selector(addClicked)
-        divider.boxType = .separator
         mode.segmentStyle = .rounded
         mode.target = self
         mode.action = #selector(modeClicked)
@@ -71,7 +69,7 @@ final class StopwatchPanelContent: StopwatchFlippedView {
         saveHint.stringValue = "秒表数据尚未保存"
         saveHint.textColor = .systemOrange
 
-        [addButton, divider, modeLabel, mode, modeHint, saveHint].forEach(addSubview)
+        [modeLabel, mode, modeHint, saveHint].forEach(addSubview)
         for keycap in keycaps {
             addSubview(keycap.label)
             addSubview(keycap.button)
@@ -127,8 +125,7 @@ final class StopwatchPanelContent: StopwatchFlippedView {
         let fullWidth = data.readings.map { StopwatchPanelRow.fullWidth($0.time.full) }.max() ?? 0
         let totalWidth = data.readings.map { StopwatchPanelRow.totalWidth($0.time.total) }.max() ?? 0
         addButton.isHidden = rows.count >= StopwatchState.maximumCount
-        let addWidth = addButton.isHidden ? 0 : ceil(addButton.intrinsicContentSize.width) + Self.groupGap
-        let minimumWidth = 2 * Self.inset + addWidth + controlsWidth
+        let minimumWidth = 2 * Self.inset + controlsWidth
         let width = min(availableWidth, max(Self.preferredWidth, minimumWidth))
         let signature = Layout(width: width, fullWidth: fullWidth, totalWidth: totalWidth,
                                modeHint: modeHint.stringValue, shortcutWidths: keycaps.map(\.width), shortcutHints: keycaps.map { $0.hint.stringValue },
@@ -152,7 +149,7 @@ final class StopwatchPanelContent: StopwatchFlippedView {
             row.onToggle = { [weak self] id in self?.onToggle?(id) }
             row.onReset = { [weak self] id in self?.onReset?(id) }
             row.onRemove = { [weak self] id in self?.onRemove?(id) }
-            addSubview(row, positioned: .below, relativeTo: addButton)
+            addSubview(row)
             return row
         }
     }
@@ -164,24 +161,17 @@ final class StopwatchPanelContent: StopwatchFlippedView {
     private func layoutContent(width: CGFloat, fullWidth: CGFloat, totalWidth: CGFloat) -> NSSize {
         let inset = Self.inset
         let inner = width - inset * 2
-        var y: CGFloat = 16
+        var y: CGFloat = 3
         for row in rows {
             row.frame = NSRect(x: inset, y: y, width: inner, height: 63)
             row.arrange(fullWidth: fullWidth, totalWidth: totalWidth)
             y += 70
         }
-        y += 3
-        divider.frame = NSRect(x: inset, y: y, width: inner, height: 1)
-        y += 11
-
-        let modeX = width - inset - controlsWidth
-        if !addButton.isHidden {
-            let addWidth = min(ceil(addButton.intrinsicContentSize.width), max(0, modeX - inset - 6))
-            addButton.frame = NSRect(x: inset, y: y, width: addWidth, height: 29)
-        }
+        y += 8
+        let modeX = inset
         modeLabel.frame = NSRect(x: modeX, y: y + 7, width: Self.modeLabelWidth, height: 17)
         mode.frame = NSRect(x: modeLabel.frame.maxX + 6, y: y + 2, width: Self.modeWidth, height: 27)
-        var x = mode.frame.maxX + Self.groupGap
+        var x = width - inset - keycaps.map(\.width).reduce(0, +) - Self.groupGap
         for keycap in keycaps {
             keycap.arrange(x: x, y: y, rightEdge: width - inset)
             x += keycap.width + Self.groupGap

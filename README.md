@@ -6,11 +6,11 @@
 
 ## 配置
 
-配置保存在 `~/Library/Application Support/NetRate/`。站点、秒表、环境音、系统状态和音量键分别对应 `config.json`、`stopwatch.json`、`hearing.json`、`system-status.json` 和 `volume-keys.json`。
+配置保存在 `~/Library/Application Support/NetRate/`。站点、秒表、环境音、系统状态、音量键和状态栏模块顺序分别对应 `config.json`、`stopwatch.json`、`hearing.json`、`system-status.json`、`volume-keys.json` 和 `status-bar.json`。
 
 HTTPS 站点可直接填写 `example.com/health`，TCP 站点分别填写主机和端口。手动修改站点配置后，在探测站点配置窗口选择「配置文件 → 重新读取配置」。
 
-悬停状态栏入口预览，左键打开面板，右键打开总菜单。点击图钉或拖动背景可固定面板，再点图钉收起。勾选「系统状态」可显示电池入口，查看 CPU、内存、启动盘和温度。
+悬停状态栏入口预览，左键打开面板，右键打开总菜单。点击图钉或拖动背景可固定面板，再点图钉收起。勾选「系统状态」可显示电池入口，查看 CPU、内存、启动盘和温度。在「状态栏指标」中拖动可调整指标顺序和显隐，点色块可配色。总菜单的「偏好设置」可调整模块顺序。
 
 鼠标移入网速浮窗可查看每种探测方式的在途请求和下次发起时间。点击「立即探测」可刷新已启用的方式。
 

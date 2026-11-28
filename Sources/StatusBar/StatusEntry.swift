@@ -3,7 +3,10 @@ import AppKit
 /// The WindowServer replicates this one system button on each menu bar.
 @MainActor
 final class StatusEntry: NSObject, NSViewToolTipOwner {
-    enum Region: CaseIterable { case hearing, network, stopwatch, system }
+    typealias Region = StatusModule
+    private(set) var moduleOrder = Region.allCases
+    var onModulesChanged: (() -> Void)?
+    private var usesNativeHighlight = false
     private var hearing: HearingPresentation?
     private var systemFace: SystemStatusFace?
     private var systemImage: NSImage?
@@ -34,7 +37,7 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
     var onTogglePanel: ((Region, NSRect, NSScreen) -> Void)?
 
     override init() {
-        let width = face.width
+        let width = face.width + 2 * StatusStripLayout.inset
         item = NSStatusBar.system.statusItem(withLength: width)
         super.init()
         item.autosaveName = "NetRate"
@@ -42,10 +45,26 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
     }
 
     var isSplit: Bool { watch != nil || hearing != nil || systemFace != nil }
-    private static let hearingGap = StatusFace.moduleGap + 1
-    private var hearingWidth: CGFloat { hearing == nil ? 0 : StatusIconState.size.width + Self.hearingGap }
-    private var baseWidth: CGFloat { hearingWidth + face.width + (watch.map { StatusFace.moduleGap + $0.width } ?? 0) }
-    private var totalWidth: CGFloat { baseWidth + (systemFace.map { StatusFace.moduleGap + $0.width } ?? 0) }
+    private var layout: StatusStripLayout {
+        var widths: [Region: CGFloat] = [.network: face.width]
+        widths[.hearing] = hearing.map { _ in StatusIconState.size.width }
+        widths[.stopwatch] = watch?.width
+        widths[.system] = systemFace?.width
+        return StatusStripLayout(order: moduleOrder, widths: widths)
+    }
+    private var totalWidth: CGFloat { layout.width }
+    var enabledModules: [Region] { layout.slots.map(\.module) }
+
+    func applyOrder(_ order: [Region]) {
+        let next = Region.ordered(order)
+        guard !removed, next != moduleOrder else { return }
+        moduleOrder = next
+        item.length = totalWidth
+        configureInput()
+        draw()
+        updateAccessibility()
+        layoutChanged()
+    }
 
     func updateSystem(_ next: SystemStatusFace?) {
         guard !removed, systemFace != next else { return }
@@ -54,7 +73,7 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
         systemFace = next
         systemImage = next?.image()
         if oldWidth != totalWidth { item.length = totalWidth }
-        if wasEnabled != (next != nil) { configureInput() }
+        if wasEnabled != (next != nil) { configureInput(); onModulesChanged?() }
         draw()
         updateAccessibility()
         if oldWidth != totalWidth { layoutChanged() }
@@ -92,7 +111,7 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
         updateFocusTransition(to: next)
         watch = next
         if next?.width != previousWidth { item.length = totalWidth }
-        if hadWatch != (watch != nil) { configureInput() }
+        if hadWatch != (watch != nil) { configureInput(); onModulesChanged?() }
         if imageChanged { draw() }
         updateAccessibility()
         if next?.width != previousWidth { layoutChanged() }
@@ -105,6 +124,7 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
         let iconChanged = next?.icon != hearing?.icon
         hearing = next
         if layoutChanged {
+            onModulesChanged?()
             observeHearingAppearance()
             item.length = totalWidth
             configureInput()
@@ -161,35 +181,16 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
     }
 
     func networkRegion(of frame: NSRect) -> NSRect {
-        let padding = max(0, (frame.width - totalWidth) / 2)
-        let left = hearing == nil ? frame.minX : frame.minX + padding + hearingWidth - Self.hearingGap / 2
-        let right = watch == nil && systemFace == nil ? frame.maxX : frame.minX + padding + hearingWidth + face.width + StatusFace.moduleGap / 2
-        return NSRect(x: left, y: frame.minY, width: right - left, height: frame.height)
+        region(.network, of: frame) ?? frame
     }
 
     func region(_ part: Region, of frame: NSRect) -> NSRect? {
-        let network = networkRegion(of: frame)
-        switch part {
-        case .network: return network
-        case .hearing:
-            guard hearing != nil else { return nil }
-            return frame.divided(atDistance: network.minX - frame.minX, from: .minXEdge).slice
-        case .stopwatch:
-            guard watch != nil else { return nil }
-            let right = region(.system, of: frame)?.minX ?? frame.maxX
-            return NSRect(x: network.maxX, y: frame.minY, width: right-network.maxX, height: frame.height)
-        case .system:
-            guard systemFace != nil else { return nil }
-            let x = frame.minX + max(0, (frame.width-totalWidth)/2) + baseWidth + StatusFace.moduleGap/2
-            return NSRect(x: x, y: frame.minY, width: frame.maxX-x, height: frame.height)
-        }
+        layout.region(part, in: frame)
     }
 
     private func target(at point: NSPoint, in frame: NSRect) -> Region {
-        if region(.system, of: frame)?.contains(point) == true { return .system }
-        if region(.hearing, of: frame)?.contains(point) == true { return .hearing }
-        if region(.stopwatch, of: frame)?.contains(point) == true { return .stopwatch }
-        return .network
+        let layout = self.layout
+        return layout.slots.first { layout.region($0.module, in: frame)?.contains(point) == true }?.module ?? .network
     }
 
     // Only exempt an actual button from outside-click dismissal. A projection on
@@ -208,14 +209,30 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
         let amounts = focusTransition?.amounts(at: ProcessInfo.processInfo.systemUptime)
         if focusTransition != nil, amounts == nil { finishFocusTransition() }
         guard let image = face.renderedImage else { return }
-        let networkAndWatch = watch?.combinedImage(with: image, focusAmounts: amounts) ?? image
-        guard hearingImage != nil || systemImage != nil else { item.button?.image = networkAndWatch; return }
-        let hearingImage = self.hearingImage, systemImage = self.systemImage, end = baseWidth
-        let offset = hearingWidth
-        item.button?.image = NSImage(size: NSSize(width: totalWidth, height: image.size.height), flipped: false) { bounds in
-            if let hearingImage { hearingImage.draw(at: NSPoint(x: 0, y: bounds.midY - hearingImage.size.height / 2), from: .zero, operation: .sourceOver, fraction: 1) }
-            systemImage?.draw(at: NSPoint(x: end + StatusFace.moduleGap, y: 0), from: .zero, operation: .sourceOver, fraction: 1)
-            networkAndWatch.draw(at: NSPoint(x: offset, y: 0), from: .zero, operation: .sourceOver, fraction: 1)
+        let layout = self.layout
+        var images: [Region: NSImage] = [.network: image]
+        images[.system] = systemImage
+        images[.hearing] = hearingImage
+        images[.stopwatch] = watch?.image(focusAmounts: amounts)
+        let native = usesNativeHighlight
+        item.button?.image = NSImage(size: NSSize(width: layout.width, height: 22), flipped: false) { bounds in
+            if !native {
+                NSGraphicsContext.saveGraphicsState()
+                let shadow = NSShadow()
+                shadow.shadowBlurRadius = 0.8
+                shadow.shadowOffset = NSSize(width: 0, height: -0.5)
+                shadow.shadowColor = NSColor.black.withAlphaComponent(0.19)
+                shadow.set()
+                let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 1), xRadius: 6, yRadius: 6)
+                NSColor.labelColor.withAlphaComponent(0.16).setFill()
+                shape.fill()
+                NSGraphicsContext.restoreGraphicsState()
+            }
+            for slot in layout.slots {
+                guard let part = images[slot.module] else { continue }
+                part.draw(at: NSPoint(x: slot.x, y: (bounds.height-part.size.height)/2),
+                          from: .zero, operation: .sourceOver, fraction: 1)
+            }
             return true
         }
     }
@@ -256,9 +273,13 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
     private func configureInput() {
         guard let button = item.button else { return }
         if #available(macOS 27.0, *) { item.expandedInterfaceDelegate = self }
-        let panels: [(Region, String)] = [(.network, "打开网络状况"), (.hearing, "打开环境音面板"), (.stopwatch, "打开秒表面板"), (.system, "打开系统状态")]
-        button.setAccessibilityCustomActions(panels.compactMap { part, name in
-            guard region(part, of: button.bounds) != nil else { return nil }
+        button.setAccessibilityCustomActions(enabledModules.map { part in
+            let name = switch part {
+            case .network: "打开网络状况"
+            case .hearing: "打开环境音面板"
+            case .stopwatch: "打开秒表面板"
+            case .system: "打开系统状态"
+            }
             return NSAccessibilityCustomAction(name: name) { [weak self] in
                 guard let self, let (frame, screen) = location(at: nil) else { return false }
                 if trackingMenu {
@@ -276,15 +297,21 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
         button.target = self
         button.action = #selector(pressed(_:))
         button.sendAction(on: [.leftMouseDown, .rightMouseUp])
-        button.setAccessibilityLabel([hearing == nil ? nil : "监听环境音", "网速", watch == nil ? nil : "StopWatch", systemFace == nil ? nil : "系统状态"].compactMap { $0 }.joined(separator: "、"))
+        button.setAccessibilityLabel(enabledModules.map { $0 == .stopwatch ? "StopWatch" : $0.title }.joined(separator: "、"))
         NSAccessibility.post(element: button, notification: .layoutChanged)
     }
 
     private func updateAccessibility() {
         guard let button = item.button else { return }
-        let parts = [hearing.map { "监听环境音，" + $0.title }, face.accessibilityValue,
-                     watch.map { "StopWatch，" + $0.accessibilityValue }, systemFace?.spoken]
-        button.setAccessibilityValue(parts.compactMap { $0 }.joined(separator: "。"))
+        let parts = enabledModules.compactMap { part -> String? in
+            switch part {
+            case .hearing: hearing.map { "监听环境音，" + $0.title }
+            case .network: face.accessibilityValue
+            case .stopwatch: watch.map { "StopWatch，" + $0.accessibilityValue }
+            case .system: systemFace?.spoken
+            }
+        }
+        button.setAccessibilityValue(parts.joined(separator: "。"))
         button.setAccessibilityHelp(isSplit ? "悬停预览，左键打开对应面板。右键点击任意位置打开状态栏扩展菜单。" : face.accessibilityHelp)
     }
 
@@ -344,6 +371,10 @@ final class StatusEntry: NSObject, NSViewToolTipOwner {
     private func synchronizeHighlight() {
         guard !removed else { return }
         let open = panelVisible || (trackingMenu && !trackingMenuOnAnotherScreen)
+        if open != usesNativeHighlight {
+            usesNativeHighlight = open
+            draw()
+        }
         if #available(macOS 27.0, *), let session = item.expandedInterfaceSession {
             if !open { session.cancel() }
         } else {

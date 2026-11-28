@@ -10,17 +10,13 @@ struct SystemStatusView: View {
     var body: some View {
         GeometryReader { geometry in
             ScrollView {
-                let pairs = geometry.size.width >= 532 ? modules.count / 2 * 2 : 0
-                VStack(spacing: 10) {
-                    if pairs > 0 {
-                        let column = GridItem(.flexible(minimum: 0), spacing: 10, alignment: .top)
-                        LazyVGrid(columns: [column, column], spacing: 10) {
-                            ForEach(modules.prefix(pairs)) { moduleTile($0) }
-                        }
-                    }
-                    ForEach(modules.dropFirst(pairs)) { moduleTile($0) }
+                if !modules.isEmpty {
+                    ReorderBoard(groups: [modules], columns: geometry.size.width >= 532 ? 2 : 1,
+                                 cellHeight: 118, gap: 10, editable: model.editing, commit: { groups in
+                        model.change { $0.modules = groups[0] }
+                    }, row: tile)
+                    .padding(.horizontal, 12).padding(.bottom, 12)
                 }
-                .padding(.horizontal, 12).padding(.bottom, 12)
                 if model.editing {
                     Button("恢复默认布局") {
                         model.change { $0.modules = ResourceModule.allCases; $0.hidden.removeAll() }
@@ -34,38 +30,19 @@ struct SystemStatusView: View {
         .allowsWindowActivationEvents()
     }
 
-    @ViewBuilder
-    private func moduleTile(_ module: ResourceModule) -> some View {
-        if model.editing {
-            tile(module)
-                .draggable("module." + module.rawValue)
-                .dropDestination(for: String.self) { values, _ in
-                    guard let raw = values.first, raw.hasPrefix("module."),
-                          let source = ResourceModule(rawValue: String(raw.dropFirst(7))) else { return false }
-                    return model.change { Self.move(source, to: module, in: &$0.modules) }
-                }
-        } else {
-            tile(module)
-        }
-    }
-
     private func tile(_ module: ResourceModule) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text(module.title).font(.system(size: 13, weight: .semibold))
+                if module == .battery && !model.editing { BatteryInfoButton(model: model) }
                 Spacer()
                 if model.editing {
                     Button { model.change {
                         if $0.hidden.contains(module) { $0.hidden.remove(module) } else { $0.hidden.insert(module) }
                     } } label: {
                         Image(systemName: model.settings.hidden.contains(module) ? "eye.slash" : "eye")
-                    }.accessibilityLabel((model.settings.hidden.contains(module) ? "显示" : "隐藏") + module.title)
+                    }.reorderControl().accessibilityLabel((model.settings.hidden.contains(module) ? "显示" : "隐藏") + module.title)
                     Image(systemName: "line.3.horizontal").foregroundStyle(.tertiary).help("拖动调整顺序")
-                } else if module == .battery {
-                    Button { model.details.toggle() } label: {
-                        Image(systemName: model.details ? "chevron.up" : "chevron.down")
-                            .frame(width: 24, height: 18)
-                    }.accessibilityLabel(model.details ? "收起电池详情" : "展开电池详情")
                 }
             }.buttonStyle(.borderless)
             Group {
@@ -78,18 +55,10 @@ struct SystemStatusView: View {
                 }
             }.opacity(model.editing && model.settings.hidden.contains(module) ? 0.4 : 1)
         }
-        .padding(13).frame(maxWidth: .infinity, alignment: .leading)
+        .padding(13).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(.background.opacity(0.58), in: RoundedRectangle(cornerRadius: 11))
         .overlay { RoundedRectangle(cornerRadius: 11).strokeBorder(.primary.opacity(0.08)).allowsHitTesting(false) }
         .background { if !model.editing { PanelDragBackground() } }
-        .accessibilityAction(named: "向前移动") { shiftModule(module, delta: -1) }
-        .accessibilityAction(named: "向后移动") { shiftModule(module, delta: 1) }
-    }
-
-    private func shiftModule(_ module: ResourceModule, delta: Int) {
-        guard model.editing, let index = model.settings.modules.firstIndex(of: module),
-              model.settings.modules.indices.contains(index + delta) else { return }
-        model.change { $0.modules.swapAt(index, index + delta) }
     }
 
     private var battery: some View {
@@ -106,18 +75,10 @@ struct SystemStatusView: View {
                     if let w = b.watts {
                         Text(String(format: w < 0 ? "放电 %.1f W" : w > 0 ? "充电 %.1f W" : "%.1f W", abs(w)))
                     }
-                    if !b.connected || b.charging {
+                    if !b.connected || b.isActivelyCharging {
                         Text((b.charging ? "距充满 " : "可用 ") + b.timeLabel)
                     }
                 }.font(.caption).foregroundStyle(.secondary).monospacedDigit()
-            }
-            if model.details {
-                Divider()
-                detail("电池健康", b?.health.map { "\($0)%" })
-                detail("循环次数", b?.cycles.map(String.init))
-                detail("当前容量", b?.currentCapacity.map { "\($0) mAh" })
-                detail("满充容量", b?.fullCapacity.map { "\($0) mAh" })
-                detail("设计容量", b?.designCapacity.map { "\($0) mAh" })
             }
         }
     }
@@ -132,12 +93,13 @@ struct SystemStatusView: View {
                         VStack(alignment: .leading, spacing: 3) {
                             HStack(alignment: .bottom, spacing: 2) {
                                 ForEach(cores) { core in
-                                    ZStack(alignment: .bottom) {
-                                        Capsule().fill(.quaternary)
-                                        Capsule().fill(kind == .performance ? Color.accentColor : Color.teal)
-                                            .frame(height: max(1, 19 * core.usage / 100))
-                                    }
-                                    .frame(maxWidth: 17).frame(height: 19)
+                                    Rectangle().fill(.quaternary)
+                                        .overlay(alignment: .bottom) {
+                                            Rectangle().fill(kind == .performance ? Color.accentColor : Color.teal)
+                                                .frame(height: 19 * min(100, max(0, core.usage)) / 100)
+                                        }
+                                        .clipShape(Capsule())
+                                        .frame(maxWidth: 17).frame(height: 19)
                                     .help("\(kind.rawValue) · 核心 \(core.id + 1) · \(Int(core.usage.rounded()))%")
                                     .accessibilityLabel("核心 \(core.id + 1)，\(kind.rawValue)，\(Int(core.usage.rounded()))%")
                                 }
@@ -185,13 +147,6 @@ struct SystemStatusView: View {
     private func number(_ text: String) -> some View {
         Text(text).font(.system(size: 19, weight: .medium)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.82)
     }
-    private func detail(_ title: String, _ value: String?) -> some View {
-        HStack {
-            Text(title).foregroundStyle(.secondary)
-            Spacer()
-            Text(value ?? "—").monospacedDigit()
-        }.font(.caption)
-    }
     private func gauge(_ ratio: Double?, color: Color) -> some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
@@ -207,10 +162,6 @@ struct SystemStatusView: View {
         if bytes < 1_073_741_824 { return String(format: "%.1f MiB", Double(bytes)/1_048_576) }
         return String(format: "%.1f GiB", Double(bytes)/1_073_741_824)
     }
-    static func move<T: Equatable>(_ source: T, to target: T, in items: inout [T]) {
-        guard let from = items.firstIndex(of: source), let to = items.firstIndex(of: target), from != to else { return }
-        items.insert(items.remove(at: from), at: to)
-    }
 }
 
 @MainActor
@@ -220,9 +171,9 @@ struct SystemStatusToolbar: View {
     var body: some View {
         HStack(spacing: 12) {
             Button { model.choosingMetrics.toggle() } label: {
-                Label("状态栏显示", systemImage: "menubar.rectangle")
+                Label("状态栏指标", systemImage: "menubar.rectangle")
             }
-            .popover(isPresented: $model.choosingMetrics, arrowEdge: .bottom) { metricPicker }
+            .popover(isPresented: $model.choosingMetrics, arrowEdge: .bottom) { MetricPicker(model: model) }
             Button {
                 model.editing.toggle()
             } label: {
@@ -233,33 +184,5 @@ struct SystemStatusToolbar: View {
         .font(.system(size: 12, weight: .medium))
         .fixedSize()
         .allowsWindowActivationEvents()
-    }
-
-    private var metricPicker: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text("状态栏显示").font(.headline)
-            let selected = model.settings.metrics
-            ForEach(selected + StatusMetric.allCases.filter { !selected.contains($0) }) { metric in
-                HStack {
-                    Toggle(metric.title, isOn: Binding(get: { model.settings.metrics.contains(metric) }, set: { enabled in
-                        model.change { $0.metrics.removeAll { $0 == metric }; if enabled { $0.metrics.append(metric) } }
-                    }))
-                    Spacer()
-                    if let index = selected.firstIndex(of: metric) {
-                        Button { model.change { $0.metrics.swapAt(index, index-1) } } label: { Image(systemName: "chevron.up") }
-                            .disabled(index == 0).accessibilityLabel("向前移动" + metric.title)
-                        Button { model.change { $0.metrics.swapAt(index, index+1) } } label: { Image(systemName: "chevron.down") }
-                            .disabled(index + 1 == selected.count).accessibilityLabel("向后移动" + metric.title)
-                        Image(systemName: "line.3.horizontal").foregroundStyle(.tertiary)
-                            .draggable("metric." + metric.rawValue)
-                    }
-                }.buttonStyle(.borderless).frame(minHeight: 22)
-                .dropDestination(for: String.self) { values, _ in
-                    guard selected.contains(metric), let raw = values.first, raw.hasPrefix("metric."),
-                          let source = StatusMetric(rawValue: String(raw.dropFirst(7))) else { return false }
-                    return model.change { SystemStatusView.move(source, to: metric, in: &$0.metrics) }
-                }
-            }
-        }.padding(14).frame(width: 238)
     }
 }

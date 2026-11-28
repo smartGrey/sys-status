@@ -2,50 +2,72 @@ import AppKit
 
 @MainActor
 struct SystemStatusFace: Equatable {
+    private struct MetricText: Equatable {
+        let metric: StatusMetric
+        let value: String
+        let color: MetricColor
+        let labelWidth: CGFloat
+        let valueWidth: CGFloat
+    }
     private let percent: Int?
-    private let charging: Bool
-    private let connected: Bool
     private let desktop: Bool
-    private let watts: String
-    private let metrics: [StatusMetric]
-    private let values: [String]
-    private static let small = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .semibold)
-    private static let normal = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
-    private static let caption = NSFont.systemFont(ofSize: 8, weight: .medium)
+    private let watts: String?
+    private let plugged: Bool
+    private let metrics: [MetricText]
+    private let number: String
+    private let bodyWidth: CGFloat
+    let width: CGFloat
+    private static let batteryFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+    private static let labelFont = NSFont.systemFont(ofSize: 10, weight: .medium)
+    private static let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+    private static let batteryInset: CGFloat = 3
+    private static let dotSpace: CGFloat = 6
+    private static let labelGap: CGFloat = 1.5
 
-    init(reading: SystemReading, metrics: [StatusMetric]) {
-        percent = reading.battery?.percent
+    init(reading: SystemReading, metrics: [StatusMetric], colors: [String: MetricColor] = [:]) {
+        let battery = reading.battery
+        percent = battery?.percent
+        number = percent.map(String.init) ?? "—"
         desktop = reading.hasBattery == false
-        charging = reading.battery?.charging == true
-        connected = reading.battery?.connected == true
-        watts = reading.battery?.watts.flatMap { $0 >= 0 ? "\(Int($0.rounded()))W" : nil } ?? "—W"
-        self.metrics = metrics
-        values = metrics.map(reading.statusValue)
+        watts = battery?.isActivelyCharging == true ?
+            (battery?.watts.flatMap { $0 >= 0 ? "\(Int($0.rounded()))W" : nil } ?? "—W") : nil
+        plugged = battery?.connected == true && watts == nil
+        let extra = watts.map { Self.dotSpace + Self.measure($0, Self.batteryFont) } ?? (plugged ? 11 : 0)
+        bodyWidth = desktop ? 18 : 2 * Self.batteryInset + Self.measure(number, Self.batteryFont) + extra
+        self.metrics = metrics.map {
+            let value = reading.statusValue($0)
+            return MetricText(metric: $0, value: value, color: colors[$0.rawValue] ?? .standard(for: $0),
+                              labelWidth: Self.measure($0.abbreviation, Self.labelFont), valueWidth: Self.measure(value, Self.valueFont))
+        }
+        width = self.metrics.enumerated().reduce(bodyWidth + (desktop ? 0 : 3)) {
+            $0 + ($1.offset == 0 ? 3 : 4) + $1.element.labelWidth + Self.labelGap + $1.element.valueWidth
+        }
     }
-    private var bodyWidth: CGFloat { desktop ? 18 : charging ? 67 : 34 }
-    private func metricWidth(_ metric: StatusMetric, value: String) -> CGFloat {
-        let sample = metric.isTemperature ? "100°" : metric == .disk ? "D 999G" : metric.abbreviation + " 100%"
-        return ceil(max(Self.measure(sample, Self.small), Self.measure(metric.isTemperature ? value : metric.abbreviation + " " + value, Self.small),
-                        metric.isTemperature ? Self.measure(metric.abbreviation, Self.caption) : 0))
-    }
-    private nonisolated static func measure(_ text: String, _ font: NSFont) -> CGFloat {
-        (text as NSString).size(withAttributes: [.font: font]).width
-    }
-    var width: CGFloat {
-        zip(metrics, values).reduce(bodyWidth + (desktop ? 0 : 3)) { $0 + 4 + metricWidth($1.0, value: $1.1) }
+    private static func measure(_ text: String, _ font: NSFont) -> CGFloat {
+        ceil((text as NSString).size(withAttributes: [.font: font]).width)
     }
     var spoken: String {
         var parts = [desktop ? "系统状态" : "电池 " + (percent.map { "\($0)%" } ?? "未知")]
-        if charging { parts.append("充电 " + watts) } else if connected { parts.append("已接电") }
-        parts += zip(metrics, values).map { $0.title + " " + $1 }
+        if let watts { parts.append("充电 " + watts) } else if plugged { parts.append("已接电") }
+        parts += metrics.map { $0.metric.title + " " + $0.value }
         return parts.joined(separator: "，")
     }
 
+    private static func batteryTint(_ percent: Int) -> NSColor {
+        let t = CGFloat(max(0, min(100, percent))) / 100
+        let red = NSColor(srgbRed: 0.96, green: 0.23, blue: 0.27, alpha: 1)
+        let amber = NSColor(srgbRed: 0.97, green: 0.69, blue: 0.18, alpha: 1)
+        let green = NSColor(srgbRed: 0.18, green: 0.85, blue: 0.42, alpha: 1)
+        return t <= 0.5 ? red.blended(withFraction: 2*t, of: amber) ?? red
+                        : amber.blended(withFraction: 2*t-1, of: green) ?? green
+    }
+
     func image() -> NSImage {
-        NSImage(size: NSSize(width: width, height: 20), flipped: false) { _ in
-            func text(_ string: String, _ font: NSFont, x: CGFloat, width: CGFloat, y: CGFloat) {
-                let origin = NSPoint(x: x + (width - Self.measure(string, font)) / 2, y: y)
-                (string as NSString).draw(at: origin, withAttributes: [.font: font, .foregroundColor: NSColor.labelColor])
+        NSImage(size: NSSize(width: width, height: 20), flipped: false) { bounds in
+            func text(_ value: String, font: NSFont, color: NSColor, x: CGFloat) {
+                let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
+                let string = value as NSString
+                string.draw(at: NSPoint(x: x, y: (bounds.height-string.size(withAttributes: attrs).height)/2), withAttributes: attrs)
             }
             func symbol(_ name: String, in rect: NSRect) {
                 let color = NSImage.SymbolConfiguration(paletteColors: [.labelColor])
@@ -54,40 +76,41 @@ struct SystemStatusFace: Equatable {
             if desktop {
                 symbol("cpu", in: NSRect(x: 0, y: 1, width: 18, height: 18))
             } else {
-                let box = NSRect(x: 0.6, y: 2, width: bodyWidth-1, height: 16)
+                let box = NSRect(x: 0.5, y: 1, width: bodyWidth-1, height: 18)
                 let outline = NSBezierPath(roundedRect: box, xRadius: 4, yRadius: 4)
                 NSColor.labelColor.withAlphaComponent(0.72).setStroke()
-                outline.lineWidth = 1.1
                 outline.stroke()
                 NSColor.secondaryLabelColor.setFill()
-                NSBezierPath(roundedRect: NSRect(x: bodyWidth+0.6, y: 7, width: 2, height: 6), xRadius: 1, yRadius: 1).fill()
+                NSBezierPath(roundedRect: NSRect(x: bodyWidth+0.5, y: 7, width: 2, height: 6), xRadius: 1, yRadius: 1).fill()
                 if let percent {
-                    let track = box.insetBy(dx: 1.5, dy: 1.5)
+                    let track = box.insetBy(dx: 1.3, dy: 1.3)
                     NSGraphicsContext.saveGraphicsState()
-                    NSBezierPath(roundedRect: track, xRadius: 2.6, yRadius: 2.6).addClip()
-                    let tint: NSColor = charging ? .systemGreen : percent <= 15 ? .systemRed : .labelColor
-                    tint.withAlphaComponent(charging || percent <= 15 ? 0.48 : 0.20).setFill()
+                    NSBezierPath(roundedRect: track, xRadius: 2.8, yRadius: 2.8).addClip()
+                    let dark = NSAppearance.currentDrawing().bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                    Self.batteryTint(percent).withAlphaComponent(dark ? 0.40 : 0.67).setFill()
                     NSRect(x: track.minX, y: track.minY, width: track.width * CGFloat(percent)/100, height: track.height).fill()
                     NSGraphicsContext.restoreGraphicsState()
                 }
-                let number = percent.map(String.init) ?? "—"
-                let value = charging ? number + " · " + watts : number
-                text(value, connected ? Self.small : Self.normal, x: connected && !charging ? 1.5 : 0, width: bodyWidth - (connected && !charging ? 12 : 0), y: connected ? 3.5 : 2.2)
-                if connected && !charging {
-                    symbol("powerplug.fill", in: NSRect(x: bodyWidth - 10, y: 5, width: 8, height: 10))
+                let start = Self.batteryInset
+                text(number, font: Self.batteryFont, color: .labelColor, x: start)
+                let end = start + Self.measure(number, Self.batteryFont)
+                if let watts {
+                    NSColor.labelColor.setFill()
+                    NSBezierPath(ovalIn: NSRect(x: end + 2, y: 9, width: 2, height: 2)).fill()
+                    text(watts, font: Self.batteryFont, color: .labelColor, x: end + Self.dotSpace)
+                } else if plugged {
+                    symbol("powerplug.fill", in: NSRect(x: end + 2, y: 4.5, width: 9, height: 11))
                 }
             }
             var x = bodyWidth + (desktop ? 0 : 3)
-            for (metric, value) in zip(metrics, values) {
-                let width = metricWidth(metric, value: value)
-                x += 4
-                if metric.isTemperature {
-                    text(metric.abbreviation, Self.caption, x: x, width: width, y: 9.2)
-                    text(value, Self.small, x: x, width: width, y: -1.4)
-                } else {
-                    text(metric.abbreviation + " " + value, Self.small, x: x, width: width, y: 3.5)
-                }
-                x += width
+            let labelAlpha: CGFloat = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast ? 0.94 : 0.84
+            for (index, metric) in metrics.enumerated() {
+                x += index == 0 ? 3 : 4
+                let color = metric.color.color
+                text(metric.metric.abbreviation, font: Self.labelFont, color: color.withAlphaComponent(labelAlpha), x: x)
+                x += metric.labelWidth + Self.labelGap
+                text(metric.value, font: Self.valueFont, color: color, x: x)
+                x += metric.valueWidth
             }
             return true
         }

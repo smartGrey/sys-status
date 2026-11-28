@@ -103,7 +103,9 @@ final class PanelChrome: NSView {
     let pin = PanelPinButton()
     private let title: NSTextField
     private let accessory: NSView?
-    init(title: String, body: NSView, window: StatusPanelWindow, accessory: NSView? = nil) {
+    private let leadingControl: NSView?
+    init(title: String, body: NSView, window: StatusPanelWindow, accessory: NSView? = nil, leadingControl: NSView? = nil) {
+        self.leadingControl = leadingControl
         self.accessory = accessory
         self.body = body
         self.title = NSTextField(labelWithString: title)
@@ -120,6 +122,8 @@ final class PanelChrome: NSView {
         self.title.font = .systemFont(ofSize: 14, weight: .semibold)
         for view in [body, self.title, header, pin] { addSubview(view) }
         if let accessory { addSubview(accessory) }
+        if let leadingControl { addSubview(leadingControl) }
+        self.title.isHidden = title.isEmpty
         window.pinChanged = { [weak pin] in pin?.update($0) }
         window.contentView = self
     }
@@ -138,7 +142,13 @@ final class PanelChrome: NSView {
         let local = body.convert(point, from: superview)
         var background: PanelDragView?
         func locate(in view: NSView) -> Bool {
-            guard !view.isHidden, view.visibleRect.contains(view.convert(local, from: body)) else { return false }
+            let point = view.convert(local, from: body)
+            guard !view.isHidden, view.visibleRect.contains(point) else { return false }
+            // Hosting views can report a visible rect larger than their bounds.
+            // Only the actual control or drag surface should claim this point.
+            if !view.bounds.contains(point), view is PanelControlRegion.Marker || view is PanelDragView {
+                return false
+            }
             if view is PanelControlRegion.Marker { return true }
             if let drag = view as? PanelDragView { background = drag; return false }
             return view.subviews.reversed().contains(where: locate)
@@ -159,6 +169,10 @@ final class PanelChrome: NSView {
             titleRight = accessory.frame.minX
         }
         title.frame = NSRect(x: 16, y: header.frame.midY - 10, width: max(0, titleRight - 22), height: 20)
+        if let leadingControl {
+            let size = leadingControl.intrinsicContentSize
+            leadingControl.frame = NSRect(x: 16, y: header.frame.midY - size.height/2, width: size.width, height: size.height)
+        }
         body.frame = NSRect(x: 0, y: 0, width: bounds.width, height: max(0,bounds.height-h))
     }
 }
